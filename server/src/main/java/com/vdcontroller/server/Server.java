@@ -3,9 +3,9 @@ package com.vdcontroller.server;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
 import android.os.Looper;
-import android.view.MotionEvent;
 
 import com.vdcontroller.server.wrappers.Ln;
+import com.vdcontroller.server.wrappers.Workarounds;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -31,7 +31,6 @@ public final class Server {
 
     public void start() {
         Ln.i("VdServer starting, socket=" + socketName);
-        // Prepare main looper for Handler usage inside VirtualDisplay
         if (Looper.myLooper() == null) {
             Looper.prepareMainLooper();
         }
@@ -149,6 +148,7 @@ public final class Server {
     }
 
     public static void main(String[] args) {
+        Workarounds.apply();
         String name = DEFAULT_SOCKET_NAME;
         for (String arg : args) {
             if (arg.startsWith("--name=")) {
