@@ -1,0 +1,20 @@
+{
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "java.compile.nullAnalysis.mode": "automatic",
+  "files.exclude": {
+    "**/.gradle": true,
+    "**/build": true
+  },
+  "terminal.integrated.env.linux": {
+    "ANDROID_HOME": "${env:ANDROID_HOME}",
+    "ANDROID_SDK_ROOT": "${env:ANDROID_HOME}"
+  },
+  "terminal.integrated.env.osx": {
+    "ANDROID_HOME": "${env:ANDROID_HOME}",
+    "ANDROID_SDK_ROOT": "${env:ANDROID_HOME}"
+  },
+  "terminal.integrated.env.windows": {
+    "ANDROID_HOME": "${env:ANDROID_HOME}",
+    "ANDROID_SDK_ROOT": "${env:ANDROID_HOME}"
+  }
+}

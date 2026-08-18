@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VD Controller</string>
+    <string name="create_vd">创建 Virtual Display</string>
+    <string name="destroy_vd">销毁 Virtual Display</string>
+    <string name="launch_app">启动应用</string>
+    <string name="show_touchpad">显示触控板</string>
+    <string name="hide_touchpad">隐藏触控板</string>
+    <string name="shizuku_not_running">请先启动 Shizuku 并授权</string>
+    <string name="vd_created">Virtual Display 已创建 (id=%1$d)</string>
+    <string name="vd_destroyed">Virtual Display 已销毁</string>
+    <string name="width">宽度</string>
+    <string name="height">高度</string>
+    <string name="dpi">DPI</string>
+    <string name="status_idle">空闲</string>
+    <string name="status_running">运行中</string>
+    <string name="select_app">选择要启动的应用</string>
+    <string name="overlay_permission">需要悬浮窗权限以显示触控板</string>
+</resources>
