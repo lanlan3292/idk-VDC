@@ -16,6 +16,7 @@ import java.lang.reflect.Method;
 public final class Workarounds {
 
     private static Context context;
+    private static Context displayContext;
     private static Object activityThread;
     private static String resolvedPackage = "com.android.shell";
 
@@ -50,6 +51,8 @@ public final class Workarounds {
             Ln.i("resolvedPackage for uid " + uid + " = " + resolvedPackage);
 
             fillAppInfo(activityThread, resolvedPackage);
+            displayContext = new FakeContext(context, resolvedPackage);
+            Ln.i("displayContext.packageName=" + displayContext.getPackageName());
             Ln.i("Workarounds: ready, package=" + resolvedPackage);
         } catch (Exception e) {
             Ln.w("Workarounds.apply failed (non-fatal): " + e);
@@ -76,8 +79,7 @@ public final class Workarounds {
         if (uid == 2000) return "com.android.shell";
         if (uid == 1000) return "android";
         if (uid == 0) {
-            Ln.w("Running as ROOT (uid 0). DisplayManager requires a package owned by this uid.");
-            Ln.w("Prefer: adb unroot, then start server as shell (uid 2000).");
+            Ln.w("Running as ROOT (uid 0). Prefer adb shell as uid 2000.");
             return "android";
         }
         return "com.android.shell";
@@ -175,6 +177,11 @@ public final class Workarounds {
     public static Context getContext() {
         if (context == null) apply();
         return context;
+    }
+
+    public static Context getDisplayContext() {
+        if (displayContext == null) apply();
+        return displayContext != null ? displayContext : context;
     }
 
     public static String getPackageName() {
