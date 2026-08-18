@@ -55,11 +55,12 @@ public final class VirtualDisplayFactory {
     private static VirtualDisplay tryContextDisplayManager(String name, int w, int h, int density,
                                                            Surface surface, int flags, Handler handler) {
         try {
-            Context ctx = Workarounds.getContext();
+            Context ctx = Workarounds.getDisplayContext();
             if (ctx == null) {
-                Ln.w("No system Context from Workarounds");
+                Ln.w("No display Context from Workarounds");
                 return null;
             }
+            Ln.i("displayContext.package=" + ctx.getPackageName());
             Object dm = ctx.getSystemService("display");
             if (dm == null) return null;
             Ln.i("Context DisplayManager: " + dm.getClass().getName());
@@ -202,7 +203,7 @@ public final class VirtualDisplayFactory {
             }
             Object config = builderClass.getMethod("build").invoke(builder);
 
-            Context ctx = Workarounds.getContext();
+            Context ctx = Workarounds.getDisplayContext();
             Object target = ctx != null ? ctx.getSystemService("display") : null;
             if (target == null) target = ServiceManager.getDisplayManagerGlobal();
 
