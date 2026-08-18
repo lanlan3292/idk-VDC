@@ -4,23 +4,20 @@ import android.annotation.SuppressLint;
 import android.app.Application;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.os.Looper;
+import android.os.Process;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
-/**
- * Bootstrap ActivityThread + AppBindData (via Unsafe) so packageName matches shell UID.
- * Same approach as scrcpy Workarounds.
- */
 @SuppressLint({"PrivateApi", "DiscouragedPrivateApi", "BlockedPrivateApi"})
 public final class Workarounds {
 
-    private static final String FAKE_PACKAGE = "com.android.shell";
-
     private static Context context;
     private static Object activityThread;
+    private static String resolvedPackage = "com.android.shell";
 
     private Workarounds() {}
 
@@ -28,6 +25,9 @@ public final class Workarounds {
         if (Looper.myLooper() == null) {
             Looper.prepareMainLooper();
         }
+        int uid = Process.myUid();
+        Ln.i("Process.myUid=" + uid + " myPid=" + Process.myPid());
+
         try {
             Class<?> atClass = Class.forName("android.app.ActivityThread");
             Method systemMain = atClass.getDeclaredMethod("systemMain");
@@ -46,30 +46,59 @@ public final class Workarounds {
                 Ln.d("sCurrentActivityThread: " + e.getMessage());
             }
 
-            fillAppInfo(activityThread);
-            Ln.i("Workarounds: ready, package=" + FAKE_PACKAGE);
+            resolvedPackage = resolvePackageForUid(uid);
+            Ln.i("resolvedPackage for uid " + uid + " = " + resolvedPackage);
+
+            fillAppInfo(activityThread, resolvedPackage);
+            Ln.i("Workarounds: ready, package=" + resolvedPackage);
         } catch (Exception e) {
             Ln.w("Workarounds.apply failed (non-fatal): " + e);
         }
     }
 
-    private static void fillAppInfo(Object at) {
+    private static String resolvePackageForUid(int uid) {
+        try {
+            if (context != null) {
+                PackageManager pm = context.getPackageManager();
+                String[] pkgs = pm.getPackagesForUid(uid);
+                if (pkgs != null && pkgs.length > 0) {
+                    for (String p : pkgs) {
+                        Ln.i("uid " + uid + " owns package: " + p);
+                    }
+                    return pkgs[0];
+                }
+                Ln.w("getPackagesForUid(" + uid + ") empty");
+            }
+        } catch (Exception e) {
+            Ln.w("resolvePackageForUid: " + e.getMessage());
+        }
+
+        if (uid == 2000) return "com.android.shell";
+        if (uid == 1000) return "android";
+        if (uid == 0) {
+            Ln.w("Running as ROOT (uid 0). DisplayManager requires a package owned by this uid.");
+            Ln.w("Prefer: adb unroot, then start server as shell (uid 2000).");
+            return "android";
+        }
+        return "com.android.shell";
+    }
+
+    private static void fillAppInfo(Object at, String packageName) {
         try {
             Class<?> atClass = at.getClass();
             Class<?> abdClass = Class.forName("android.app.ActivityThread$AppBindData");
-
             Object abd = allocateInstance(abdClass);
 
             ApplicationInfo ai = new ApplicationInfo();
-            ai.packageName = FAKE_PACKAGE;
+            ai.packageName = packageName;
             try {
                 Field f = ApplicationInfo.class.getDeclaredField("processName");
                 f.setAccessible(true);
-                f.set(ai, FAKE_PACKAGE);
+                f.set(ai, packageName);
             } catch (Exception ignored) {}
 
             setField(abd, abdClass, "appInfo", ai);
-            setField(abd, abdClass, "processName", FAKE_PACKAGE);
+            setField(abd, abdClass, "processName", packageName);
             setField(at, atClass, "mBoundApplication", abd);
 
             try {
@@ -79,7 +108,7 @@ public final class Workarounds {
                 if (context != null) {
                     Context base = context;
                     try {
-                        base = context.createPackageContext(FAKE_PACKAGE, Context.CONTEXT_INCLUDE_CODE);
+                        base = context.createPackageContext(packageName, 0);
                     } catch (Exception e) {
                         Ln.d("createPackageContext: " + e.getMessage());
                     }
@@ -93,10 +122,9 @@ public final class Workarounds {
             try {
                 Method cpn = atClass.getDeclaredMethod("currentPackageName");
                 cpn.setAccessible(true);
-                Object pkg = cpn.invoke(null);
-                Ln.i("currentPackageName=" + pkg);
+                Ln.i("currentPackageName=" + cpn.invoke(null));
             } catch (Exception e) {
-                Ln.d("currentPackageName check: " + e.getMessage());
+                Ln.d("currentPackageName: " + e.getMessage());
             }
 
             Ln.i("fillAppInfo done");
@@ -111,7 +139,6 @@ public final class Workarounds {
             c.setAccessible(true);
             return c.newInstance();
         } catch (Exception ignored) {}
-
         try {
             Class<?> unsafeClass;
             try {
@@ -122,12 +149,10 @@ public final class Workarounds {
             Field theUnsafe = unsafeClass.getDeclaredField("theUnsafe");
             theUnsafe.setAccessible(true);
             Object unsafe = theUnsafe.get(null);
-            Method allocateInstance = unsafeClass.getMethod("allocateInstance", Class.class);
-            return allocateInstance.invoke(unsafe, clazz);
+            return unsafeClass.getMethod("allocateInstance", Class.class).invoke(unsafe, clazz);
         } catch (Exception e) {
             Ln.w("Unsafe.allocateInstance failed: " + e);
         }
-
         throw new IllegalAccessException("Cannot allocate " + clazz.getName());
     }
 
@@ -153,6 +178,6 @@ public final class Workarounds {
     }
 
     public static String getPackageName() {
-        return FAKE_PACKAGE;
+        return resolvedPackage;
     }
 }
