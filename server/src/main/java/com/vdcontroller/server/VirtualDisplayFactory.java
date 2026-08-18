@@ -98,9 +98,14 @@ public final class VirtualDisplayFactory {
                     Object[] args = new Object[p.length];
                     args[0] = name; args[1] = w; args[2] = h; args[3] = density;
                     args[4] = surface; args[5] = flags;
+                    int stringIdx = 0;
                     for (int i = 6; i < p.length; i++) {
                         if (Handler.class.isAssignableFrom(p[i])) args[i] = handler;
-                        else if (p[i] == String.class) args[i] = "com.android.shell";
+                        else if (p[i] == String.class) {
+                            if (stringIdx == 0) args[i] = "vdcontroller";
+                            else args[i] = Workarounds.getPackageName();
+                            stringIdx++;
+                        }
                         else if (p[i] == int.class || p[i] == Integer.TYPE) args[i] = 0;
                         else if (p[i] == boolean.class || p[i] == Boolean.TYPE) args[i] = false;
                         else args[i] = null;
@@ -132,9 +137,14 @@ public final class VirtualDisplayFactory {
                 Object[] args = new Object[p.length];
                 args[0] = name; args[1] = w; args[2] = h; args[3] = density;
                 args[4] = surface; args[5] = flags;
+                int stringIdx = 0;
                 for (int i = 6; i < p.length; i++) {
                     if (Handler.class.isAssignableFrom(p[i])) args[i] = handler;
-                    else if (p[i] == String.class) args[i] = "com.android.shell";
+                    else if (p[i] == String.class) {
+                        if (stringIdx == 0) args[i] = "vdcontroller";
+                        else args[i] = Workarounds.getPackageName();
+                        stringIdx++;
+                    }
                     else if (p[i] == int.class || p[i] == Integer.TYPE) args[i] = 0;
                     else if (p[i] == boolean.class || p[i] == Boolean.TYPE) args[i] = false;
                     else args[i] = null;
@@ -177,7 +187,7 @@ public final class VirtualDisplayFactory {
                 args[0] = config;
                 for (int i = 1; i < p.length; i++) {
                     if (Handler.class.isAssignableFrom(p[i])) args[i] = handler;
-                    else if (p[i] == String.class) args[i] = "com.android.shell";
+                    else if (p[i] == String.class) args[i] = Workarounds.getPackageName();
                     else args[i] = null;
                 }
                 Object result = m.invoke(target, args);
