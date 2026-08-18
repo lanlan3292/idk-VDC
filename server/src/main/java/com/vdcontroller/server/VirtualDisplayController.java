@@ -2,7 +2,6 @@ package com.vdcontroller.server;
 
 import android.annotation.SuppressLint;
 import android.hardware.display.VirtualDisplay;
-import android.hardware.input.InputManager;
 import android.media.ImageReader;
 import android.os.Build;
 import android.os.Handler;
@@ -44,8 +43,7 @@ public class VirtualDisplayController {
     private Surface externalSurface;
 
     public VirtualDisplayController() {
-        InputManager im = ServiceManager.getInputManager();
-        inputInjector = new InputManagerWrapper(im);
+        inputInjector = new InputManagerWrapper();
     }
 
     public synchronized int create(int width, int height, int dpi, Surface surface) {
