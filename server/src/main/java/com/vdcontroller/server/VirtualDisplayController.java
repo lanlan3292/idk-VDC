@@ -15,10 +15,6 @@ import com.vdcontroller.server.wrappers.ServiceManager;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 
-/**
- * Creates / manages a VirtualDisplay and injects input into it.
- * Runs under shell UID (via app_process or Shizuku).
- */
 @SuppressLint({"PrivateApi", "BlockedPrivateApi", "DiscouragedPrivateApi"})
 public class VirtualDisplayController {
 
@@ -85,21 +81,6 @@ public class VirtualDisplayController {
             releaseResources();
         }
         return displayId;
-    }
-
-    private VirtualDisplay createVirtualDisplay(String name, int w, int h, int density,
-                                                Surface surface, int flags) throws Exception {
-        return VirtualDisplayFactory.create(name, w, h, density, surface, flags, callbackHandler);
-    }
-
-    private VirtualDisplay createWithConfig(String name, int w, int h, int density,
-                                            Surface surface, int flags) throws Exception {
-        return VirtualDisplayFactory.create(name, w, h, density, surface, flags, callbackHandler);
-    }
-
-    private VirtualDisplay wrapToken(Object token, String name, int w, int h,
-                                     int density, Surface surface) {
-        return null;
     }
 
     public synchronized void setSurface(Surface surface) {
@@ -176,16 +157,49 @@ public class VirtualDisplayController {
     public boolean launchApp(String packageName) {
         if (!isActive()) return false;
         try {
-            String cmd = "am start --display " + displayId
-                    + " -a android.intent.action.MAIN"
-                    + " -c android.intent.category.LAUNCHER "
+            String resolve = "cmd package resolve-activity --brief "
+                    + "-a android.intent.action.MAIN "
+                    + "-c android.intent.category.LAUNCHER "
                     + packageName;
+            Process rp = Runtime.getRuntime().exec(new String[]{"sh", "-c", resolve});
+            java.io.BufferedReader br = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(rp.getInputStream()));
+            String line;
+            String component = null;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.contains("/") && !line.startsWith("priority=") && !line.startsWith("No activity")) {
+                    component = line;
+                }
+            }
+            rp.waitFor();
+
+            String cmd;
+            if (component != null && component.contains("/")) {
+                cmd = "am start --display " + displayId + " -n " + component;
+                Ln.i("launchApp component=" + component);
+            } else {
+                cmd = "am start --display " + displayId
+                        + " -a android.intent.action.MAIN"
+                        + " -c android.intent.category.LAUNCHER"
+                        + " -p " + packageName;
+                Ln.i("launchApp package fallback " + packageName);
+            }
+
             Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
             int code = p.waitFor();
+            java.io.BufferedReader er = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getErrorStream()));
+            String el;
+            while ((el = er.readLine()) != null) {
+                Ln.w("am: " + el);
+            }
             Ln.i("launchApp " + packageName + " exit=" + code);
+
             if (code != 0) {
                 String cmd2 = "monkey --display-id " + displayId
-                        + " -p " + packageName + " -c android.intent.category.LAUNCHER 1";
+                        + " -p " + packageName
+                        + " -c android.intent.category.LAUNCHER 1";
                 Process p2 = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd2});
                 code = p2.waitFor();
                 Ln.i("launchApp via monkey exit=" + code);
