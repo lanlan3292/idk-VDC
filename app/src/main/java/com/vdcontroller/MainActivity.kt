@@ -1,7 +1,10 @@
 package com.vdcontroller
 
 import android.content.Intent
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -24,6 +27,9 @@ import com.vdcontroller.gesture.TouchGestureHandler
 import com.vdcontroller.launcher.AppListAdapter
 import com.vdcontroller.launcher.AppLoader
 import com.vdcontroller.ui.FloatingTouchpadView
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 
@@ -41,6 +47,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private var touchpadView: FloatingTouchpadView? = null
     private var touchpadShown = false
     private var gestureHandler: TouchGestureHandler? = null
+    private var frameJob: Job? = null
 
     private val shizukuPermissionListener =
         Shizuku.OnRequestPermissionResultListener { _, grantResult ->
@@ -66,7 +73,6 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
 
-        // Try connect / start backend
         lifecycleScope.launch {
             ensureBackend()
         }
@@ -75,96 +81,88 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     override fun onDestroy() {
         super.onDestroy()
         Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
+        stopFrameLoop()
         hideTouchpad()
         client.disconnect()
     }
 
-    // ---- Surface ----
-    override fun surfaceCreated(holder: SurfaceHolder) {
-        // Surface is ready; if VD already exists we could setSurface,
-        // but our current server creates its own ImageReader surface.
-        // For a tighter integration one would pass this surface to the server.
-    }
-
+    override fun surfaceCreated(holder: SurfaceHolder) {}
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
     override fun surfaceDestroyed(holder: SurfaceHolder) {}
 
-    // ---- Backend ----
+    private fun startFrameLoop() {
+        frameJob?.cancel()
+        frameJob = lifecycleScope.launch {
+            while (isActive) {
+                try {
+                    if (client.isConnected && vdInfo != null) {
+                        val jpeg = client.getFrame()
+                        if (jpeg != null) {
+                            val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                            if (bmp != null) {
+                                val holder = binding.previewSurface.holder
+                                val canvas = holder.lockCanvas()
+                                if (canvas != null) {
+                                    try {
+                                        canvas.drawColor(Color.BLACK)
+                                        val scale = minOf(
+                                            canvas.width / bmp.width.toFloat(),
+                                            canvas.height / bmp.height.toFloat()
+                                        )
+                                        val dw = bmp.width * scale
+                                        val dh = bmp.height * scale
+                                        val left = (canvas.width - dw) / 2f
+                                        val top = (canvas.height - dh) / 2f
+                                        canvas.drawBitmap(bmp, null, RectF(left, top, left + dw, top + dh), null)
+                                    } finally {
+                                        holder.unlockCanvasAndPost(canvas)
+                                    }
+                                }
+                                bmp.recycle()
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "frame: ${e.message}")
+                }
+                delay(80)
+            }
+        }
+    }
+
+    private fun stopFrameLoop() {
+        frameJob?.cancel()
+        frameJob = null
+    }
+
     private suspend fun ensureBackend(): Boolean {
-        // 1) Try direct connect (server already running via adb)
         if (client.ping()) {
             updateStatus("已连接到 Backend (ADB)")
             return true
         }
-        // 2) Try Shizuku
         if (Shizuku.pingBinder()) {
             if (Shizuku.checkSelfPermission() != 0) {
                 Shizuku.requestPermission(0)
-                updateStatus("等待 Shizuku 授权…")
+                updateStatus("请授权 Shizuku")
                 return false
             }
             tryStartServerViaShizuku()
-            // Give it a moment then reconnect
-            kotlinx.coroutines.delay(800)
-            if (client.ping()) {
-                updateStatus("已连接到 Backend (Shizuku)")
-                return true
+            repeat(10) {
+                delay(300)
+                if (client.ping()) {
+                    updateStatus("已连接到 Backend (Shizuku)")
+                    return true
+                }
             }
         }
-        updateStatus("Backend 未运行。请用 ADB 启动服务，或开启 Shizuku")
+        updateStatus("未连接 Backend，请先用 adb 启动 server")
         return false
     }
 
-    /**
-     * Launch the server jar via Shizuku (shell).
-     * Requires the jar to be pushed to /data/local/tmp/vdserver.jar
-     * or packaged in the app and extracted.
-     *
-     * Shizuku.newProcess is not public in recent API versions, so we call it
-     * via reflection. If that fails, user can still start the server with ADB:
-     *   adb shell CLASSPATH=/data/local/tmp/vdserver.jar app_process /system/bin \
-     *       com.vdcontroller.server.Server --name=vdcontroller
-     */
     private fun tryStartServerViaShizuku() {
-        try {
-            // Extract server jar from assets if present
-            val jarFile = java.io.File(filesDir, "vdserver.jar")
-            if (!jarFile.exists()) {
-                try {
-                    assets.open("vdserver.jar").use { input ->
-                        jarFile.outputStream().use { output -> input.copyTo(output) }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "No embedded vdserver.jar in assets")
-                }
-            }
-            val jarPath = if (jarFile.exists()) jarFile.absolutePath
-            else "/data/local/tmp/vdserver.jar"
-
-            val cmd = arrayOf(
-                "sh", "-c",
-                "CLASSPATH=$jarPath app_process /system/bin com.vdcontroller.server.Server --name=vdcontroller &"
-            )
-
-            // newProcess is package-private / hidden in some Shizuku versions → reflection
-            val method = Shizuku::class.java.getDeclaredMethod(
-                "newProcess",
-                Array<String>::class.java,
-                Array<String>::class.java,
-                String::class.java
-            )
-            method.isAccessible = true
-            val process = method.invoke(null, cmd, null, null) as? Process
-            Log.i(TAG, "Started server via Shizuku")
-            process?.inputStream?.close()
-            process?.errorStream?.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "Shizuku start failed", e)
-            toast("Shizuku 自动启动失败，请用 ADB 手动启动 Server")
-        }
+        toast("请用 adb 启动 vdserver（当前推荐）")
     }
 
-    // ---- VD control ----
     private fun createVirtualDisplay() {
         val w = binding.inputWidth.text?.toString()?.toIntOrNull() ?: 1080
         val h = binding.inputHeight.text?.toString()?.toIntOrNull() ?: 1920
@@ -191,7 +189,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 binding.emptyHint.visibility = View.GONE
                 binding.cursorView.visibility = View.VISIBLE
                 updateStatus(getString(R.string.vd_created, info.displayId))
-                toast("Virtual Display 创建成功 id=${info.displayId}")
+                startFrameLoop()
             }.onFailure {
                 updateStatus("创建失败: ${it.message}")
                 toast("创建失败: ${it.message}")
@@ -201,6 +199,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private fun destroyVirtualDisplay() {
         lifecycleScope.launch {
+            stopFrameLoop()
             client.destroyVd()
             vdInfo = null
             gestureHandler = null
@@ -215,65 +214,59 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private fun showAppPicker() {
-        val apps = AppLoader.loadLaunchableApps(packageManager)
-        val view = layoutInflater.inflate(R.layout.dialog_app_list, null)
-        val rv = view.findViewById<RecyclerView>(R.id.appList)
-        rv.layoutManager = LinearLayoutManager(this)
+        val apps = AppLoader.loadLauncherApps(this)
+        val recycler = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
+        }
         val dialog = AlertDialog.Builder(this)
-            .setView(view)
-            .setNegativeButton("取消", null)
+            .setTitle("启动应用到 Virtual Display")
+            .setView(recycler)
+            .setNegativeButton(android.R.string.cancel, null)
             .create()
-        rv.adapter = AppListAdapter(packageManager) { item ->
+        recycler.adapter = AppListAdapter(apps) { item ->
             dialog.dismiss()
             lifecycleScope.launch {
                 val r = client.launchApp(item.packageName)
                 r.onSuccess { toast("已启动 ${item.label}") }
-                    .onFailure { toast("启动失败: ${it.message}") }
+                r.onFailure { toast("启动失败: ${it.message}") }
             }
-        }.also { it.submit(apps) }
+        }
         dialog.show()
     }
 
-    // ---- Floating touchpad ----
     private fun toggleTouchpad() {
         if (touchpadShown) hideTouchpad() else showTouchpad()
     }
 
     private fun showTouchpad() {
         if (!Settings.canDrawOverlays(this)) {
-            toast(getString(R.string.overlay_permission))
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
+            startActivityForResult(
+                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
+                OVERLAY_PERMISSION_REQ
             )
-            startActivityForResult(intent, OVERLAY_PERMISSION_REQ)
+            toast("需要悬浮窗权限")
             return
         }
         if (touchpadView != null) return
-
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        val view = FloatingTouchpadView(this)
+        view.onGesture = { ev -> gestureHandler?.onTouchEvent(ev) ?: false }
         val params = WindowManager.LayoutParams(
-            600, 400,
+            (resources.displayMetrics.widthPixels * 0.45f).toInt(),
+            (resources.displayMetrics.heightPixels * 0.35f).toInt(),
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                    or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 50
-            y = 200
-        }
-
-        val tp = FloatingTouchpadView(this).apply {
-            gestureHandler = this@MainActivity.gestureHandler
-            attachToWindow(wm, params)
-        }
-        wm.addView(tp, params)
-        touchpadView = tp
+        )
+        params.gravity = Gravity.BOTTOM or Gravity.END
+        params.x = 24
+        params.y = 120
+        wm.addView(view, params)
+        touchpadView = view
         touchpadShown = true
         binding.btnTouchpad.text = getString(R.string.hide_touchpad)
     }
@@ -291,28 +284,16 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private fun updateCursorOverlay(nx: Float, ny: Float) {
         val container = binding.previewContainer
-        val cw = container.width
-        val ch = container.height
-        if (cw <= 0 || ch <= 0) return
-        val cursor = binding.cursorView
-        cursor.x = nx * cw - cursor.width / 2f
-        cursor.y = ny * ch - cursor.height / 2f
+        if (container.width == 0 || container.height == 0) return
+        binding.cursorView.x = nx * container.width - binding.cursorView.width / 2f
+        binding.cursorView.y = ny * container.height - binding.cursorView.height / 2f
     }
 
     private fun updateStatus(msg: String) {
-        runOnUiThread { binding.statusText.text = msg }
+        binding.statusText.text = msg
     }
 
     private fun toast(msg: String) {
-        runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == OVERLAY_PERMISSION_REQ) {
-            if (Settings.canDrawOverlays(this)) showTouchpad()
-            else toast("未授予悬浮窗权限")
-        }
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 }
