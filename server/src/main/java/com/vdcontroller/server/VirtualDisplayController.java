@@ -1,7 +1,10 @@
 package com.vdcontroller.server;
 
 import android.annotation.SuppressLint;
+import android.graphics.Bitmap;
+import android.graphics.PixelFormat;
 import android.hardware.display.VirtualDisplay;
+import android.media.Image;
 import android.media.ImageReader;
 import android.os.Build;
 import android.os.Handler;
@@ -12,6 +15,8 @@ import com.vdcontroller.server.wrappers.InputManagerWrapper;
 import com.vdcontroller.server.wrappers.Ln;
 import com.vdcontroller.server.wrappers.ServiceManager;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 
@@ -19,12 +24,6 @@ import java.lang.reflect.Method;
 public class VirtualDisplayController {
 
     private static final String DISPLAY_NAME = "VD-Controller";
-
-    private static final int FLAG_PUBLIC = 1;
-    private static final int FLAG_OWN_CONTENT_ONLY = 1 << 3;
-    private static final int FLAG_SUPPORTS_TOUCH = 1 << 6;
-    private static final int FLAG_OWN_FOCUS = 1 << 14;
-    private static final int FLAG_DEVICE_DISPLAY_GROUP = 1 << 15;
 
     private VirtualDisplay virtualDisplay;
     private ImageReader imageReader;
@@ -37,6 +36,8 @@ public class VirtualDisplayController {
     private HandlerThread callbackThread;
     private Handler callbackHandler;
     private Surface externalSurface;
+    private volatile byte[] latestJpeg;
+    private final Object frameLock = new Object();
 
     public VirtualDisplayController() {
         inputInjector = new InputManagerWrapper();
@@ -57,8 +58,26 @@ public class VirtualDisplayController {
 
         Surface targetSurface = surface;
         if (targetSurface == null) {
-            imageReader = ImageReader.newInstance(width, height, 0x1, 2);
+            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
+            imageReader.setOnImageAvailableListener(reader -> {
+                Image image = null;
+                try {
+                    image = reader.acquireLatestImage();
+                    if (image == null) return;
+                    byte[] jpeg = imageToJpeg(image, 60);
+                    if (jpeg != null) {
+                        synchronized (frameLock) {
+                            latestJpeg = jpeg;
+                        }
+                    }
+                } catch (Exception e) {
+                    Ln.d("frame capture: " + e.getMessage());
+                } finally {
+                    if (image != null) image.close();
+                }
+            }, callbackHandler);
             targetSurface = imageReader.getSurface();
+            Ln.i("ImageReader ready for frame capture");
         }
 
         int flags = VirtualDisplayFactory.defaultFlags();
@@ -81,6 +100,63 @@ public class VirtualDisplayController {
             releaseResources();
         }
         return displayId;
+    }
+
+    public byte[] getLatestJpegFrame() {
+        synchronized (frameLock) {
+            return latestJpeg;
+        }
+    }
+
+    private static byte[] imageToJpeg(Image image, int quality) {
+        try {
+            int w = image.getWidth();
+            int h = image.getHeight();
+            Image.Plane[] planes = image.getPlanes();
+            if (planes == null || planes.length == 0) return null;
+            ByteBuffer buffer = planes[0].getBuffer();
+            int pixelStride = planes[0].getPixelStride();
+            int rowStride = planes[0].getRowStride();
+            int rowPadding = rowStride - pixelStride * w;
+
+            Bitmap bitmap;
+            if (rowPadding == 0) {
+                bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                bitmap.copyPixelsFromBuffer(buffer);
+            } else {
+                bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                int[] pixels = new int[w * h];
+                int offset = 0;
+                for (int y = 0; y < h; y++) {
+                    for (int x = 0; x < w; x++) {
+                        int i = offset + x * pixelStride;
+                        int r = buffer.get(i) & 0xff;
+                        int g = buffer.get(i + 1) & 0xff;
+                        int b = buffer.get(i + 2) & 0xff;
+                        int a = pixelStride == 4 ? (buffer.get(i + 3) & 0xff) : 255;
+                        pixels[y * w + x] = (a << 24) | (r << 16) | (g << 8) | b;
+                    }
+                    offset += rowStride;
+                }
+                bitmap.setPixels(pixels, 0, w, 0, 0, w, h);
+            }
+
+            int maxW = 540;
+            if (bitmap.getWidth() > maxW) {
+                float scale = maxW / (float) bitmap.getWidth();
+                int nh = Math.max(1, Math.round(bitmap.getHeight() * scale));
+                Bitmap scaled = Bitmap.createScaledBitmap(bitmap, maxW, nh, true);
+                bitmap.recycle();
+                bitmap = scaled;
+            }
+
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            bitmap.compress(Bitmap.CompressFormat.JPEG, quality, bos);
+            bitmap.recycle();
+            return bos.toByteArray();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public synchronized void setSurface(Surface surface) {
@@ -125,6 +201,7 @@ public class VirtualDisplayController {
             callbackHandler = null;
         }
         externalSurface = null;
+        synchronized (frameLock) { latestJpeg = null; }
     }
 
     public int getDisplayId() { return displayId; }
@@ -188,12 +265,6 @@ public class VirtualDisplayController {
 
             Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
             int code = p.waitFor();
-            java.io.BufferedReader er = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(p.getErrorStream()));
-            String el;
-            while ((el = er.readLine()) != null) {
-                Ln.w("am: " + el);
-            }
             Ln.i("launchApp " + packageName + " exit=" + code);
 
             if (code != 0) {
