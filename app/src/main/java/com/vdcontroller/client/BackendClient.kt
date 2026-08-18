@@ -1,25 +1,26 @@
 package com.vdcontroller.client
 
-import android.net.LocalSocket
-import android.net.LocalSocketAddress
 import android.util.Log
-import android.view.MotionEvent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Connects to the privileged server via LocalSocket (abstract namespace).
+ * Connects to the privileged server via TCP 127.0.0.1 (avoids SELinux abstract-socket blocks).
  */
-class BackendClient(private val socketName: String = "vdcontroller") {
+class BackendClient(
+    private val host: String = "127.0.0.1",
+    private val port: Int = 27183
+) {
 
     companion object {
         private const val TAG = "BackendClient"
 
-        // Must match Protocol.java
         const val MSG_CREATE_VD = 1
         const val MSG_DESTROY_VD = 2
         const val MSG_INJECT_TOUCH = 3
@@ -38,7 +39,7 @@ class BackendClient(private val socketName: String = "vdcontroller") {
 
     data class VdInfo(val displayId: Int, val width: Int, val height: Int, val dpi: Int)
 
-    private var socket: LocalSocket? = null
+    private var socket: Socket? = null
     private var input: DataInputStream? = null
     private var output: DataOutputStream? = null
     private val connected = AtomicBoolean(false)
@@ -49,13 +50,14 @@ class BackendClient(private val socketName: String = "vdcontroller") {
     fun connect(): Boolean {
         if (connected.get()) return true
         return try {
-            val s = LocalSocket()
-            s.connect(LocalSocketAddress(socketName))
+            val s = Socket()
+            s.connect(InetSocketAddress(host, port), 3000)
+            s.tcpNoDelay = true
             socket = s
-            input = DataInputStream(s.inputStream)
-            output = DataOutputStream(s.outputStream)
+            input = DataInputStream(s.getInputStream())
+            output = DataOutputStream(s.getOutputStream())
             connected.set(true)
-            Log.i(TAG, "Connected to $socketName")
+            Log.i(TAG, "Connected to $host:$port")
             true
         } catch (e: IOException) {
             Log.e(TAG, "Connect failed: ${e.message}")
@@ -121,7 +123,6 @@ class BackendClient(private val socketName: String = "vdcontroller") {
         }
     }
 
-    /** Fire-and-forget style inject (best effort, non-blocking response wait optional) */
     fun injectTouch(action: Int, x: Float, y: Float, pointerId: Int = 0,
                     pressure: Float = 1f, downTime: Long = 0L) {
         if (!connected.get()) return
@@ -136,7 +137,6 @@ class BackendClient(private val socketName: String = "vdcontroller") {
                 out.writeFloat(pressure)
                 out.writeLong(downTime)
                 out.flush()
-                // drain response
                 val inp = input ?: return
                 val type = inp.readByte().toInt() and 0xFF
                 if (type == MSG_ERROR) readString(inp)
@@ -202,7 +202,7 @@ class BackendClient(private val socketName: String = "vdcontroller") {
 
     private fun ensureConnected() {
         if (!connected.get()) {
-            if (!connect()) throw IOException("Cannot connect to backend. Is the server running?")
+            if (!connect()) throw IOException("Cannot connect to backend at $host:$port. Is the server running?")
         }
     }
 
