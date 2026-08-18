@@ -10,9 +10,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Connects to the privileged server via TCP 127.0.0.1 (avoids SELinux abstract-socket blocks).
- */
 class BackendClient(
     private val host: String = "127.0.0.1",
     private val port: Int = 27183
@@ -29,12 +26,14 @@ class BackendClient(
         const val MSG_LAUNCH_APP = 6
         const val MSG_RESIZE_VD = 7
         const val MSG_PING = 9
+        const val MSG_GET_FRAME = 10
 
         const val MSG_VD_CREATED = 20
         const val MSG_VD_DESTROYED = 21
         const val MSG_ERROR = 22
         const val MSG_PONG = 23
         const val MSG_OK = 24
+        const val MSG_FRAME = 25
     }
 
     data class VdInfo(val displayId: Int, val width: Int, val height: Int, val dpi: Int)
@@ -183,6 +182,35 @@ class BackendClient(
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    suspend fun getFrame(): ByteArray? = withContext(Dispatchers.IO) {
+        ensureConnected()
+        val out = output ?: return@withContext null
+        val inp = input ?: return@withContext null
+        try {
+            synchronized(this@BackendClient) {
+                out.writeByte(MSG_GET_FRAME)
+                out.flush()
+                when (val type = inp.readByte().toInt() and 0xFF) {
+                    MSG_FRAME -> {
+                        val len = inp.readInt()
+                        if (len <= 0 || len > 8_000_000) return@synchronized null
+                        val data = ByteArray(len)
+                        inp.readFully(data)
+                        data
+                    }
+                    MSG_ERROR -> {
+                        readString(inp)
+                        null
+                    }
+                    else -> null
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "getFrame: ${e.message}")
+            null
         }
     }
 
