@@ -1,14 +1,13 @@
 package com.vdcontroller.server.wrappers;
 
 import android.annotation.SuppressLint;
-import android.hardware.input.InputManager;
 import android.os.IBinder;
 import android.os.IInterface;
 
 import java.lang.reflect.Method;
 
 /**
- * Reflection-based access to system services (scrcpy pattern).
+ * Access system services via ServiceManager binders (works in app_process).
  */
 @SuppressLint("PrivateApi")
 public final class ServiceManager {
@@ -24,21 +23,47 @@ public final class ServiceManager {
         }
     }
 
-    private static InputManager inputManager;
-    private static Object displayManagerGlobal;
-    private static Object windowManager;
+    private static Object inputManager;          // IInputManager
+    private static Object displayManagerGlobal;  // DisplayManagerGlobal
 
     private ServiceManager() {}
 
-    public static IInterface getService(String service, String type) {
+    public static IBinder getServiceBinder(String name) {
         try {
-            IBinder binder = (IBinder) GET_SERVICE_METHOD.invoke(null, service);
-            Method asInterface = Class.forName(type + "$Stub")
+            return (IBinder) GET_SERVICE_METHOD.invoke(null, name);
+        } catch (Exception e) {
+            throw new AssertionError("getService(" + name + ")", e);
+        }
+    }
+
+    public static IInterface getService(String service, String stubClass) {
+        try {
+            IBinder binder = getServiceBinder(service);
+            Method asInterface = Class.forName(stubClass + "$Stub")
                     .getMethod("asInterface", IBinder.class);
             return (IInterface) asInterface.invoke(null, binder);
         } catch (Exception e) {
-            throw new AssertionError(e);
+            throw new AssertionError("getService " + service, e);
         }
+    }
+
+    /** Returns android.hardware.input.IInputManager */
+    public static Object getInputManager() {
+        if (inputManager == null) {
+            try {
+                IBinder binder = getServiceBinder("input");
+                Class<?> stub = Class.forName("android.hardware.input.IInputManager$Stub");
+                Method asInterface = stub.getMethod("asInterface", IBinder.class);
+                inputManager = asInterface.invoke(null, binder);
+                if (inputManager == null) {
+                    throw new NullPointerException("IInputManager is null");
+                }
+                Ln.i("IInputManager acquired");
+            } catch (Exception e) {
+                throw new AssertionError("Cannot get IInputManager", e);
+            }
+        }
+        return inputManager;
     }
 
     public static Object getDisplayManagerGlobal() {
@@ -54,23 +79,7 @@ public final class ServiceManager {
         return displayManagerGlobal;
     }
 
-    public static InputManager getInputManager() {
-        if (inputManager == null) {
-            try {
-                Method getInstance = InputManager.class.getDeclaredMethod("getInstance");
-                getInstance.setAccessible(true);
-                inputManager = (InputManager) getInstance.invoke(null);
-            } catch (Exception e) {
-                throw new AssertionError("Cannot get InputManager", e);
-            }
-        }
-        return inputManager;
-    }
-
     public static Object getWindowManager() {
-        if (windowManager == null) {
-            windowManager = getService("window", "android.view.IWindowManager");
-        }
-        return windowManager;
+        return getService("window", "android.view.IWindowManager");
     }
 }
