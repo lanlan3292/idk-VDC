@@ -2,14 +2,12 @@ package com.vdcontroller.server.wrappers;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.content.pm.ApplicationInfo;
+import android.os.Looper;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 /**
- * Bootstrap ActivityThread / fake Application so system services work under app_process.
- * Same idea as scrcpy Workarounds.
+ * Bootstrap ActivityThread so some system APIs work under app_process.
  */
 @SuppressLint({"PrivateApi", "DiscouragedPrivateApi", "BlockedPrivateApi"})
 public final class Workarounds {
@@ -21,6 +19,9 @@ public final class Workarounds {
     public static void apply() {
         if (context != null) return;
         try {
+            if (Looper.myLooper() == null) {
+                Looper.prepareMainLooper();
+            }
             Class<?> atClass = Class.forName("android.app.ActivityThread");
             Method systemMain = atClass.getDeclaredMethod("systemMain");
             systemMain.setAccessible(true);
@@ -28,18 +29,10 @@ public final class Workarounds {
 
             Method getSystemContext = atClass.getDeclaredMethod("getSystemContext");
             getSystemContext.setAccessible(true);
-            Context ctx = (Context) getSystemContext.invoke(activityThread);
-
-            ApplicationInfo ai = new ApplicationInfo();
-            ai.packageName = "com.android.shell";
-            try {
-                Field pkgInfo = ctx.getClass().getDeclaredField("mPackageInfo");
-            } catch (Exception ignored) {}
-
-            context = ctx;
+            context = (Context) getSystemContext.invoke(activityThread);
             Ln.i("Workarounds: ActivityThread system context ready");
         } catch (Exception e) {
-            Ln.e("Workarounds.apply failed", e);
+            Ln.w("Workarounds.apply failed (non-fatal): " + e.getMessage());
             try {
                 Class<?> atClass = Class.forName("android.app.ActivityThread");
                 Method current = atClass.getDeclaredMethod("currentActivityThread");
@@ -49,7 +42,7 @@ public final class Workarounds {
                     context = (Context) getSystemContext.invoke(at);
                 }
             } catch (Exception e2) {
-                Ln.e("Workarounds fallback failed", e2);
+                Ln.w("Workarounds fallback failed (non-fatal): " + e2.getMessage());
             }
         }
     }
