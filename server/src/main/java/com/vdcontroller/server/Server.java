@@ -1,7 +1,5 @@
 package com.vdcontroller.server;
 
-import android.net.LocalServerSocket;
-import android.net.LocalSocket;
 import android.os.Looper;
 
 import com.vdcontroller.server.wrappers.Ln;
@@ -10,36 +8,40 @@ import com.vdcontroller.server.wrappers.Workarounds;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 
 /**
- * Entry point when launched via:
- *   CLASSPATH=vdserver.jar app_process / com.vdcontroller.server.Server [--name=xxx]
+ * Entry point:
+ *   CLASSPATH=vdserver.jar app_process / com.vdcontroller.server.Server [--port=27183]
  *
- * Listens on a LocalServerSocket and handles control messages.
+ * Listens on TCP 127.0.0.1 so the normal App can connect (abstract local sockets
+ * are often blocked by SELinux between untrusted_app and shell).
  */
 public final class Server {
 
-    private static final String DEFAULT_SOCKET_NAME = "vdcontroller";
+    private static final int DEFAULT_PORT = 27183;
 
-    private final String socketName;
+    private final int port;
     private final VirtualDisplayController controller = new VirtualDisplayController();
     private volatile boolean running = true;
 
-    public Server(String socketName) {
-        this.socketName = socketName;
+    public Server(int port) {
+        this.port = port;
     }
 
     public void start() {
-        Ln.i("VdServer starting, socket=" + socketName);
+        Ln.i("VdServer starting, tcp 127.0.0.1:" + port);
         if (Looper.myLooper() == null) {
             Looper.prepareMainLooper();
         }
 
-        try (LocalServerSocket serverSocket = new LocalServerSocket(socketName)) {
-            Ln.i("Listening on localabstract:" + socketName);
+        try (ServerSocket serverSocket = new ServerSocket(port, 1, InetAddress.getByName("127.0.0.1"))) {
+            Ln.i("Listening on 127.0.0.1:" + port);
             while (running) {
-                LocalSocket client = serverSocket.accept();
-                Ln.i("Client connected");
+                Socket client = serverSocket.accept();
+                Ln.i("Client connected from " + client.getRemoteSocketAddress());
                 handleClient(client);
             }
         } catch (IOException e) {
@@ -50,7 +52,7 @@ public final class Server {
         }
     }
 
-    private void handleClient(LocalSocket client) {
+    private void handleClient(Socket client) {
         try (DataInputStream in = new DataInputStream(client.getInputStream());
              DataOutputStream out = new DataOutputStream(client.getOutputStream())) {
 
@@ -148,13 +150,18 @@ public final class Server {
     }
 
     public static void main(String[] args) {
+        if (Looper.myLooper() == null) {
+            Looper.prepareMainLooper();
+        }
         Workarounds.apply();
-        String name = DEFAULT_SOCKET_NAME;
+        int port = DEFAULT_PORT;
         for (String arg : args) {
-            if (arg.startsWith("--name=")) {
-                name = arg.substring("--name=".length());
+            if (arg.startsWith("--port=")) {
+                try {
+                    port = Integer.parseInt(arg.substring("--port=".length()));
+                } catch (NumberFormatException ignored) {}
             }
         }
-        new Server(name).start();
+        new Server(port).start();
     }
 }
