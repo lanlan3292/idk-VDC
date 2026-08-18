@@ -65,14 +65,12 @@ public class VirtualDisplayController {
             targetSurface = imageReader.getSurface();
         }
 
-        int flags = FLAG_PUBLIC | FLAG_OWN_CONTENT_ONLY | FLAG_SUPPORTS_TOUCH;
-        if (Build.VERSION.SDK_INT >= 34) {
-            flags |= FLAG_OWN_FOCUS | FLAG_DEVICE_DISPLAY_GROUP;
-        }
+        int flags = VirtualDisplayFactory.defaultFlags();
+        Ln.i("create() flags=" + flags + " surface=" + (targetSurface != null));
 
         try {
-            virtualDisplay = createVirtualDisplay(DISPLAY_NAME, width, height, dpi,
-                    targetSurface, flags);
+            virtualDisplay = VirtualDisplayFactory.create(DISPLAY_NAME, width, height, dpi,
+                    targetSurface, flags, callbackHandler);
             if (virtualDisplay != null) {
                 displayId = virtualDisplay.getDisplay().getDisplayId();
                 Ln.i("VirtualDisplay created: " + width + "x" + height + "/" + dpi
@@ -91,132 +89,16 @@ public class VirtualDisplayController {
 
     private VirtualDisplay createVirtualDisplay(String name, int w, int h, int density,
                                                 Surface surface, int flags) throws Exception {
-        Object dmg = ServiceManager.getDisplayManagerGlobal();
-        Class<?> dmgClass = dmg.getClass();
-
-        for (Method m : dmgClass.getDeclaredMethods()) {
-            if (!"createVirtualDisplay".equals(m.getName())) continue;
-            m.setAccessible(true);
-            Class<?>[] p = m.getParameterTypes();
-
-            try {
-                Object result = null;
-
-                if (p.length == 6
-                        && p[0] == String.class && p[1] == int.class
-                        && p[4] == Surface.class && p[5] == int.class) {
-                    result = m.invoke(dmg, name, w, h, density, surface, flags);
-                } else if (p.length == 8
-                        && p[0] == String.class && p[4] == Surface.class) {
-                    result = m.invoke(dmg, name, w, h, density, surface, flags,
-                            null, callbackHandler);
-                } else if (p.length >= 9 && p[0] == String.class) {
-                    Object[] args = new Object[p.length];
-                    args[0] = name;
-                    args[1] = w;
-                    args[2] = h;
-                    args[3] = density;
-                    args[4] = surface;
-                    args[5] = flags;
-                    for (int i = 6; i < p.length; i++) {
-                        if (p[i] == String.class) {
-                            args[i] = "com.android.shell";
-                        } else if (p[i] == int.class || p[i] == Integer.TYPE) {
-                            args[i] = 0;
-                        } else if (p[i] == boolean.class || p[i] == Boolean.TYPE) {
-                            args[i] = false;
-                        } else if (Handler.class.isAssignableFrom(p[i])) {
-                            args[i] = callbackHandler;
-                        } else {
-                            args[i] = null;
-                        }
-                    }
-                    result = m.invoke(dmg, args);
-                } else {
-                    continue;
-                }
-
-                if (result instanceof VirtualDisplay) {
-                    Ln.i("createVirtualDisplay via " + m.toGenericString());
-                    return (VirtualDisplay) result;
-                }
-
-                if (result != null) {
-                    VirtualDisplay vd = wrapToken(result, name, w, h, density, surface);
-                    if (vd != null) return vd;
-                    Ln.w("Unhandled return type: " + result.getClass().getName());
-                }
-            } catch (Exception e) {
-                Ln.d("Overload failed: " + m.getName() + " -> " + e.getCause());
-            }
-        }
-
-        if (Build.VERSION.SDK_INT >= 34) {
-            try {
-                return createWithConfig(name, w, h, density, surface, flags);
-            } catch (Exception e) {
-                Ln.w("VirtualDisplayConfig path failed: " + e.getMessage());
-            }
-        }
-
-        throw new IllegalStateException("No usable createVirtualDisplay method found on this device");
+        return VirtualDisplayFactory.create(name, w, h, density, surface, flags, callbackHandler);
     }
 
     private VirtualDisplay createWithConfig(String name, int w, int h, int density,
                                             Surface surface, int flags) throws Exception {
-        Class<?> configClass = Class.forName("android.hardware.display.VirtualDisplayConfig");
-        Class<?> builderClass = Class.forName("android.hardware.display.VirtualDisplayConfig$Builder");
-
-        Constructor<?> builderCtor = builderClass.getConstructor(String.class, int.class, int.class, int.class);
-        Object builder = builderCtor.newInstance(name, w, h, density);
-
-        builderClass.getMethod("setFlags", int.class).invoke(builder, flags);
-        if (surface != null) {
-            builderClass.getMethod("setSurface", Surface.class).invoke(builder, surface);
-        }
-        Object config = builderClass.getMethod("build").invoke(builder);
-
-        Object dmg = ServiceManager.getDisplayManagerGlobal();
-        for (Method m : dmg.getClass().getDeclaredMethods()) {
-            if (!"createVirtualDisplay".equals(m.getName())) continue;
-            Class<?>[] p = m.getParameterTypes();
-            if (p.length >= 1 && p[0] == configClass) {
-                m.setAccessible(true);
-                Object[] args = new Object[p.length];
-                args[0] = config;
-                for (int i = 1; i < p.length; i++) {
-                    if (Handler.class.isAssignableFrom(p[i])) args[i] = callbackHandler;
-                    else if (p[i] == String.class) args[i] = "com.android.shell";
-                    else args[i] = null;
-                }
-                Object result = m.invoke(dmg, args);
-                if (result instanceof VirtualDisplay) return (VirtualDisplay) result;
-            }
-        }
-        return null;
+        return VirtualDisplayFactory.create(name, w, h, density, surface, flags, callbackHandler);
     }
 
     private VirtualDisplay wrapToken(Object token, String name, int w, int h,
                                      int density, Surface surface) {
-        try {
-            for (Constructor<?> c : VirtualDisplay.class.getDeclaredConstructors()) {
-                c.setAccessible(true);
-                Class<?>[] p = c.getParameterTypes();
-                if (p.length >= 1 && p[0].isInstance(token)) {
-                    Object[] args = new Object[p.length];
-                    args[0] = token;
-                    for (int i = 1; i < p.length; i++) {
-                        if (p[i] == String.class) args[i] = name;
-                        else if (p[i] == int.class) args[i] = (i == 1 ? w : (i == 2 ? h : density));
-                        else if (p[i] == Surface.class) args[i] = surface;
-                        else args[i] = null;
-                    }
-                    return (VirtualDisplay) c.newInstance(args);
-                }
-            }
-        } catch (Exception e) {
-            Ln.d("wrapToken failed: " + e.getMessage());
-        }
         return null;
     }
 
