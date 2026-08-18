@@ -12,13 +12,6 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 
-/**
- * Entry point:
- *   CLASSPATH=vdserver.jar app_process / com.vdcontroller.server.Server [--port=27183]
- *
- * Listens on TCP 127.0.0.1 so the normal App can connect (abstract local sockets
- * are often blocked by SELinux between untrusted_app and shell).
- */
 public final class Server {
 
     private static final int DEFAULT_PORT = 27183;
@@ -126,6 +119,19 @@ public final class Server {
                         int dpi = in.readInt();
                         controller.resize(w, h, dpi);
                         out.writeByte(Protocol.MSG_OK);
+                        out.flush();
+                        break;
+                    }
+                    case Protocol.MSG_GET_FRAME: {
+                        byte[] jpeg = controller.getLatestJpegFrame();
+                        if (jpeg == null || jpeg.length == 0) {
+                            out.writeByte(Protocol.MSG_ERROR);
+                            Protocol.writeString(out, "no frame");
+                        } else {
+                            out.writeByte(Protocol.MSG_FRAME);
+                            out.writeInt(jpeg.length);
+                            out.write(jpeg);
+                        }
                         out.flush();
                         break;
                     }
