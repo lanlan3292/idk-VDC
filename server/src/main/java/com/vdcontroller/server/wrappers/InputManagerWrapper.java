@@ -1,7 +1,6 @@
 package com.vdcontroller.server.wrappers;
 
 import android.annotation.SuppressLint;
-import android.hardware.input.InputManager;
 import android.os.SystemClock;
 import android.view.InputDevice;
 import android.view.InputEvent;
@@ -12,7 +11,7 @@ import android.view.MotionEvent;
 import java.lang.reflect.Method;
 
 /**
- * Inject input events with optional displayId (scrcpy pattern).
+ * Inject via IInputManager.injectInputEvent (binder), not InputManager.getInstance().
  */
 @SuppressLint({"PrivateApi", "BlockedPrivateApi", "DiscouragedPrivateApi"})
 public final class InputManagerWrapper {
@@ -21,33 +20,35 @@ public final class InputManagerWrapper {
     public static final int INJECT_MODE_WAIT_FOR_RESULT = 1;
     public static final int INJECT_MODE_WAIT_FOR_FINISH = 2;
 
-    private static Method injectInputEventMethod;
+    private final Object iInputManager; // IInputManager
+    private Method injectMethod;
     private static Method setDisplayIdMethod;
 
-    private final InputManager manager;
-
-    public InputManagerWrapper(InputManager manager) {
-        this.manager = manager;
+    public InputManagerWrapper() {
+        this.iInputManager = ServiceManager.getInputManager();
     }
 
-    private static Method getInjectMethod() throws NoSuchMethodException {
-        if (injectInputEventMethod == null) {
-            injectInputEventMethod = InputManager.class.getMethod(
-                    "injectInputEvent", InputEvent.class, int.class);
+    private Method getInjectMethod() throws Exception {
+        if (injectMethod == null) {
+            for (Method m : iInputManager.getClass().getMethods()) {
+                if ("injectInputEvent".equals(m.getName()) && m.getParameterTypes().length >= 2) {
+                    injectMethod = m;
+                    break;
+                }
+            }
+            if (injectMethod == null) {
+                throw new NoSuchMethodException("injectInputEvent");
+            }
         }
-        return injectInputEventMethod;
-    }
-
-    private static Method getSetDisplayIdMethod() throws NoSuchMethodException {
-        if (setDisplayIdMethod == null) {
-            setDisplayIdMethod = InputEvent.class.getMethod("setDisplayId", int.class);
-        }
-        return setDisplayIdMethod;
+        return injectMethod;
     }
 
     public static boolean setDisplayId(InputEvent event, int displayId) {
         try {
-            getSetDisplayIdMethod().invoke(event, displayId);
+            if (setDisplayIdMethod == null) {
+                setDisplayIdMethod = InputEvent.class.getMethod("setDisplayId", int.class);
+            }
+            setDisplayIdMethod.invoke(event, displayId);
             return true;
         } catch (Exception e) {
             return false;
@@ -56,7 +57,11 @@ public final class InputManagerWrapper {
 
     public boolean injectInputEvent(InputEvent event, int mode) {
         try {
-            return (boolean) getInjectMethod().invoke(manager, event, mode);
+            Object result = getInjectMethod().invoke(iInputManager, event, mode);
+            if (result instanceof Boolean) {
+                return (Boolean) result;
+            }
+            return true;
         } catch (Exception e) {
             Ln.e("injectInputEvent failed", e);
             return false;
@@ -65,14 +70,10 @@ public final class InputManagerWrapper {
 
     public boolean injectEvent(InputEvent event, int displayId, int mode) {
         if (displayId != 0) {
-            if (!setDisplayId(event, displayId)) {
-                Ln.w("Failed to set displayId=" + displayId);
-            }
+            setDisplayId(event, displayId);
         }
         return injectInputEvent(event, mode);
     }
-
-    // ---------- helpers ----------
 
     public boolean injectKeyEvent(int action, int keyCode, int metaState, int displayId) {
         long now = SystemClock.uptimeMillis();
