@@ -8,17 +8,17 @@ import java.nio.charset.StandardCharsets;
 /**
  * Simple binary protocol between App and Server.
  *
- * Client → Server:
+ * Client -> Server:
  *   byte type
  *   payload...
  *
- * Server → Client:
+ * Server -> Client:
  *   byte type
  *   payload...
  */
 public final class Protocol {
 
-    // Client → Server
+    // Client -> Server
     public static final byte MSG_CREATE_VD     = 1;
     public static final byte MSG_DESTROY_VD    = 2;
     public static final byte MSG_INJECT_TOUCH  = 3;
@@ -29,7 +29,7 @@ public final class Protocol {
     public static final byte MSG_SET_SURFACE   = 8; // not used over socket
     public static final byte MSG_PING          = 9;
 
-    // Server → Client
+    // Server -> Client
     public static final byte MSG_VD_CREATED    = 20;
     public static final byte MSG_VD_DESTROYED  = 21;
     public static final byte MSG_ERROR         = 22;
@@ -55,8 +55,6 @@ public final class Protocol {
         in.readFully(bytes);
         return new String(bytes, StandardCharsets.UTF_8);
     }
-
-    // ---- payload helpers ----
 
     public static void writeCreateVd(DataOutputStream out, int w, int h, int dpi) throws IOException {
         out.writeByte(MSG_CREATE_VD);
