@@ -56,10 +56,11 @@ public final class Server {
                         int w = in.readInt();
                         int h = in.readInt();
                         int dpi = in.readInt();
-                        Ln.i("CREATE_VD " + w + "x" + h + "/" + dpi);
-                        int id = controller.create(w, h, dpi, null);
+                        int streamMode = in.readInt();
+                        Ln.i("CREATE_VD " + w + "x" + h + "/" + dpi + " stream=" + streamMode);
+                        int id = controller.create(w, h, dpi, null, streamMode);
                         if (id >= 0) {
-                            Protocol.writeVdCreated(out, id, w, h, dpi);
+                            Protocol.writeVdCreated(out, id, w, h, dpi, controller.getStreamMode());
                         } else {
                             Protocol.writeError(out, "Failed to create VirtualDisplay");
                         }
@@ -123,14 +124,14 @@ public final class Server {
                         break;
                     }
                     case Protocol.MSG_GET_FRAME: {
-                        byte[] jpeg = controller.getLatestJpegFrame();
-                        if (jpeg == null || jpeg.length == 0) {
+                        byte[] frame = controller.getLatestFrame();
+                        if (frame == null || frame.length == 0) {
                             out.writeByte(Protocol.MSG_ERROR);
                             Protocol.writeString(out, "no frame");
                         } else {
                             out.writeByte(Protocol.MSG_FRAME);
-                            out.writeInt(jpeg.length);
-                            out.write(jpeg);
+                            out.writeInt(frame.length);
+                            out.write(frame);
                         }
                         out.flush();
                         break;

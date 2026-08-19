@@ -16,4 +16,7 @@
     <string name="status_running">运行中</string>
     <string name="select_app">选择要启动的应用</string>
     <string name="overlay_permission">需要悬浮窗权限以显示触控板</string>
+    <string name="stream_jpeg">JPEG（兼容）</string>
+    <string name="stream_h264">H.264</string>
+    <string name="stream_h265">H.265</string>
 </resources>
