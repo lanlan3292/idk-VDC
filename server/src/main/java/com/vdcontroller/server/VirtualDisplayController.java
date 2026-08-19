@@ -34,12 +34,18 @@ public class VirtualDisplayController {
     private Surface externalSurface;
     private volatile byte[] latestJpeg;
     private final Object frameLock = new Object();
+    private int streamMode = Protocol.STREAM_JPEG;
+    private VideoEncoder videoEncoder;
 
     public VirtualDisplayController() {
         inputInjector = new InputManagerWrapper();
     }
 
     public synchronized int create(int width, int height, int dpi, Surface surface) {
+        return create(width, height, dpi, surface, Protocol.STREAM_JPEG);
+    }
+
+    public synchronized int create(int width, int height, int dpi, Surface surface, int streamMode) {
         if (virtualDisplay != null) {
             destroy();
         }
@@ -47,6 +53,7 @@ public class VirtualDisplayController {
         this.height = height;
         this.dpi = dpi;
         this.externalSurface = surface;
+        this.streamMode = streamMode;
 
         callbackThread = new HandlerThread("VD-Callback");
         callbackThread.start();
@@ -54,30 +61,45 @@ public class VirtualDisplayController {
 
         Surface targetSurface = surface;
         if (targetSurface == null) {
-            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
-            imageReader.setOnImageAvailableListener(reader -> {
-                Image image = null;
+            if (streamMode == Protocol.STREAM_H264 || streamMode == Protocol.STREAM_H265) {
                 try {
-                    image = reader.acquireLatestImage();
-                    if (image == null) return;
-                    byte[] jpeg = imageToJpeg(image, 45);
-                    if (jpeg != null) {
-                        synchronized (frameLock) {
-                            latestJpeg = jpeg;
-                        }
-                    }
+                    videoEncoder = new VideoEncoder(streamMode, width, height);
+                    videoEncoder.start();
+                    targetSurface = videoEncoder.getInputSurface();
+                    Ln.i("VideoEncoder surface ready mode=" + streamMode);
                 } catch (Exception e) {
-                    Ln.d("frame capture: " + e.getMessage());
-                } finally {
-                    if (image != null) image.close();
+                    Ln.e("VideoEncoder failed, fallback JPEG", e);
+                    this.streamMode = Protocol.STREAM_JPEG;
+                    videoEncoder = null;
                 }
-            }, callbackHandler);
-            targetSurface = imageReader.getSurface();
-            Ln.i("ImageReader ready for frame capture");
+            }
+            if (targetSurface == null) {
+                imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
+                imageReader.setOnImageAvailableListener(reader -> {
+                    Image image = null;
+                    try {
+                        image = reader.acquireLatestImage();
+                        if (image == null) return;
+                        byte[] jpeg = imageToJpeg(image, 45);
+                        if (jpeg != null) {
+                            synchronized (frameLock) {
+                                latestJpeg = jpeg;
+                            }
+                        }
+                    } catch (Exception e) {
+                        Ln.d("frame capture: " + e.getMessage());
+                    } finally {
+                        if (image != null) image.close();
+                    }
+                }, callbackHandler);
+                targetSurface = imageReader.getSurface();
+                Ln.i("ImageReader ready for frame capture");
+            }
         }
 
         int flags = VirtualDisplayFactory.defaultFlags();
-        Ln.i("create() flags=" + flags + " surface=" + (targetSurface != null));
+        Ln.i("create() flags=" + flags + " surface=" + (targetSurface != null)
+                + " streamMode=" + this.streamMode);
 
         try {
             virtualDisplay = VirtualDisplayFactory.create(DISPLAY_NAME, width, height, dpi,
@@ -89,6 +111,7 @@ public class VirtualDisplayController {
             } else {
                 Ln.e("createVirtualDisplay returned null");
                 displayId = -1;
+                releaseResources();
             }
         } catch (Exception e) {
             Ln.e("Failed to create VirtualDisplay", e);
@@ -99,6 +122,17 @@ public class VirtualDisplayController {
     }
 
     public byte[] getLatestJpegFrame() {
+        return getLatestFrame();
+    }
+
+    public int getStreamMode() {
+        return streamMode;
+    }
+
+    public byte[] getLatestFrame() {
+        if (videoEncoder != null) {
+            return videoEncoder.getLatestFrame();
+        }
         synchronized (frameLock) {
             return latestJpeg;
         }
@@ -187,6 +221,10 @@ public class VirtualDisplayController {
     }
 
     private void releaseResources() {
+        if (videoEncoder != null) {
+            try { videoEncoder.stop(); } catch (Exception ignored) {}
+            videoEncoder = null;
+        }
         if (imageReader != null) {
             try { imageReader.close(); } catch (Exception ignored) {}
             imageReader = null;
