@@ -36,6 +36,7 @@ public class VirtualDisplayController {
     private final Object frameLock = new Object();
     private int streamMode = Protocol.STREAM_JPEG;
     private VideoEncoder videoEncoder;
+    private String lastError;
 
     public VirtualDisplayController() {
         inputInjector = new InputManagerWrapper();
@@ -54,6 +55,7 @@ public class VirtualDisplayController {
         this.dpi = dpi;
         this.externalSurface = surface;
         this.streamMode = streamMode;
+        this.lastError = null;
 
         callbackThread = new HandlerThread("VD-Callback");
         callbackThread.start();
@@ -111,11 +113,13 @@ public class VirtualDisplayController {
             } else {
                 Ln.e("createVirtualDisplay returned null");
                 displayId = -1;
+                lastError = "createVirtualDisplay returned null";
                 releaseResources();
             }
         } catch (Exception e) {
             Ln.e("Failed to create VirtualDisplay", e);
             displayId = -1;
+            lastError = e.getMessage() != null ? e.getMessage() : e.toString();
             releaseResources();
         }
         return displayId;
@@ -127,6 +131,10 @@ public class VirtualDisplayController {
 
     public int getStreamMode() {
         return streamMode;
+    }
+
+    public String getLastError() {
+        return lastError;
     }
 
     public byte[] getLatestFrame() {
