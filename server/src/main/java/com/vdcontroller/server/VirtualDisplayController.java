@@ -6,19 +6,15 @@ import android.graphics.PixelFormat;
 import android.hardware.display.VirtualDisplay;
 import android.media.Image;
 import android.media.ImageReader;
-import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.view.Surface;
 
 import com.vdcontroller.server.wrappers.InputManagerWrapper;
 import com.vdcontroller.server.wrappers.Ln;
-import com.vdcontroller.server.wrappers.ServiceManager;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
 
 @SuppressLint({"PrivateApi", "BlockedPrivateApi", "DiscouragedPrivateApi"})
 public class VirtualDisplayController {
@@ -64,7 +60,7 @@ public class VirtualDisplayController {
                 try {
                     image = reader.acquireLatestImage();
                     if (image == null) return;
-                    byte[] jpeg = imageToJpeg(image, 60);
+                    byte[] jpeg = imageToJpeg(image, 45);
                     if (jpeg != null) {
                         synchronized (frameLock) {
                             latestJpeg = jpeg;
@@ -141,11 +137,11 @@ public class VirtualDisplayController {
                 bitmap.setPixels(pixels, 0, w, 0, 0, w, h);
             }
 
-            int maxW = 540;
+            int maxW = 400;
             if (bitmap.getWidth() > maxW) {
                 float scale = maxW / (float) bitmap.getWidth();
                 int nh = Math.max(1, Math.round(bitmap.getHeight() * scale));
-                Bitmap scaled = Bitmap.createScaledBitmap(bitmap, maxW, nh, true);
+                Bitmap scaled = Bitmap.createScaledBitmap(bitmap, maxW, nh, false);
                 bitmap.recycle();
                 bitmap = scaled;
             }
