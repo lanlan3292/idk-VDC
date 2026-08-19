@@ -14,7 +14,6 @@ import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -190,6 +189,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 binding.cursorView.visibility = View.VISIBLE
                 updateStatus(getString(R.string.vd_created, info.displayId))
                 startFrameLoop()
+                toast("Virtual Display 创建成功 id=${info.displayId}")
             }.onFailure {
                 updateStatus("创建失败: ${it.message}")
                 toast("创建失败: ${it.message}")
@@ -214,23 +214,22 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private fun showAppPicker() {
-        val apps = AppLoader.loadLauncherApps(this)
-        val recycler = RecyclerView(this).apply {
-            layoutManager = LinearLayoutManager(this@MainActivity)
-        }
+        val apps = AppLoader.loadLaunchableApps(packageManager)
+        val view = layoutInflater.inflate(R.layout.dialog_app_list, null)
+        val rv = view.findViewById<RecyclerView>(R.id.appList)
+        rv.layoutManager = LinearLayoutManager(this)
         val dialog = AlertDialog.Builder(this)
-            .setTitle("启动应用到 Virtual Display")
-            .setView(recycler)
-            .setNegativeButton(android.R.string.cancel, null)
+            .setView(view)
+            .setNegativeButton("取消", null)
             .create()
-        recycler.adapter = AppListAdapter(apps) { item ->
+        rv.adapter = AppListAdapter(packageManager) { item ->
             dialog.dismiss()
             lifecycleScope.launch {
                 val r = client.launchApp(item.packageName)
                 r.onSuccess { toast("已启动 ${item.label}") }
-                r.onFailure { toast("启动失败: ${it.message}") }
+                    .onFailure { toast("启动失败: ${it.message}") }
             }
-        }
+        }.also { it.submit(apps) }
         dialog.show()
     }
 
@@ -240,33 +239,39 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private fun showTouchpad() {
         if (!Settings.canDrawOverlays(this)) {
-            startActivityForResult(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
-                OVERLAY_PERMISSION_REQ
+            toast(getString(R.string.overlay_permission))
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
             )
-            toast("需要悬浮窗权限")
+            startActivityForResult(intent, OVERLAY_PERMISSION_REQ)
             return
         }
         if (touchpadView != null) return
+
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        val view = FloatingTouchpadView(this)
-        view.onGesture = { ev -> gestureHandler?.onTouchEvent(ev) ?: false }
         val params = WindowManager.LayoutParams(
-            (resources.displayMetrics.widthPixels * 0.45f).toInt(),
-            (resources.displayMetrics.heightPixels * 0.35f).toInt(),
+            600, 400,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else
-                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
-        )
-        params.gravity = Gravity.BOTTOM or Gravity.END
-        params.x = 24
-        params.y = 120
-        wm.addView(view, params)
-        touchpadView = view
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 50
+            y = 200
+        }
+
+        val tp = FloatingTouchpadView(this).apply {
+            gestureHandler = this@MainActivity.gestureHandler
+            attachToWindow(wm, params)
+        }
+        wm.addView(tp, params)
+        touchpadView = tp
         touchpadShown = true
         binding.btnTouchpad.text = getString(R.string.hide_touchpad)
     }
@@ -284,16 +289,27 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private fun updateCursorOverlay(nx: Float, ny: Float) {
         val container = binding.previewContainer
-        if (container.width == 0 || container.height == 0) return
-        binding.cursorView.x = nx * container.width - binding.cursorView.width / 2f
-        binding.cursorView.y = ny * container.height - binding.cursorView.height / 2f
+        val cw = container.width
+        val ch = container.height
+        if (cw <= 0 || ch <= 0) return
+        val cursor = binding.cursorView
+        cursor.x = nx * cw - cursor.width / 2f
+        cursor.y = ny * ch - cursor.height / 2f
     }
 
     private fun updateStatus(msg: String) {
-        binding.statusText.text = msg
+        runOnUiThread { binding.statusText.text = msg }
     }
 
     private fun toast(msg: String) {
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == OVERLAY_PERMISSION_REQ) {
+            if (Settings.canDrawOverlays(this)) showTouchpad()
+        }
     }
 }
