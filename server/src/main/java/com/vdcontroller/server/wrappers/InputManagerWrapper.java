@@ -10,9 +10,6 @@ import android.view.MotionEvent;
 
 import java.lang.reflect.Method;
 
-/**
- * Inject via IInputManager.injectInputEvent (binder), not InputManager.getInstance().
- */
 @SuppressLint({"PrivateApi", "BlockedPrivateApi", "DiscouragedPrivateApi"})
 public final class InputManagerWrapper {
 
@@ -20,20 +17,28 @@ public final class InputManagerWrapper {
     public static final int INJECT_MODE_WAIT_FOR_RESULT = 1;
     public static final int INJECT_MODE_WAIT_FOR_FINISH = 2;
 
-    private final Object iInputManager; // IInputManager
+    private final Object iInputManager;
     private Method injectMethod;
-    private static Method setDisplayIdMethod;
+    private Method setDisplayIdMethod;
 
     public InputManagerWrapper() {
         this.iInputManager = ServiceManager.getInputManager();
+        if (iInputManager == null) {
+            Ln.e("IInputManager is null - injection will fail");
+        }
     }
 
     private Method getInjectMethod() throws Exception {
         if (injectMethod == null) {
             for (Method m : iInputManager.getClass().getMethods()) {
-                if ("injectInputEvent".equals(m.getName()) && m.getParameterTypes().length >= 2) {
-                    injectMethod = m;
-                    break;
+                if ("injectInputEvent".equals(m.getName())) {
+                    Class<?>[] p = m.getParameterTypes();
+                    if (p.length >= 2 && InputEvent.class.isAssignableFrom(p[0])) {
+                        injectMethod = m;
+                        injectMethod.setAccessible(true);
+                        Ln.i("injectInputEvent: " + m.toGenericString());
+                        break;
+                    }
                 }
             }
             if (injectMethod == null) {
@@ -43,14 +48,16 @@ public final class InputManagerWrapper {
         return injectMethod;
     }
 
-    public static boolean setDisplayId(InputEvent event, int displayId) {
+    private boolean setDisplayId(InputEvent event, int displayId) {
         try {
             if (setDisplayIdMethod == null) {
                 setDisplayIdMethod = InputEvent.class.getMethod("setDisplayId", int.class);
+                setDisplayIdMethod.setAccessible(true);
             }
             setDisplayIdMethod.invoke(event, displayId);
             return true;
         } catch (Exception e) {
+            Ln.w("setDisplayId failed: " + e.getMessage());
             return false;
         }
     }
@@ -63,16 +70,23 @@ public final class InputManagerWrapper {
             }
             return true;
         } catch (Exception e) {
-            Ln.e("injectInputEvent failed", e);
+            Throwable c = e.getCause() != null ? e.getCause() : e;
+            Ln.e("injectInputEvent failed: " + c);
             return false;
         }
     }
 
     public boolean injectEvent(InputEvent event, int displayId, int mode) {
-        if (displayId != 0) {
-            setDisplayId(event, displayId);
+        if (displayId > 0) {
+            if (!setDisplayId(event, displayId)) {
+                Ln.w("could not set displayId=" + displayId + " on event");
+            }
         }
-        return injectInputEvent(event, mode);
+        boolean ok = injectInputEvent(event, mode);
+        if (!ok) {
+            Ln.w("inject returned false action displayId=" + displayId);
+        }
+        return ok;
     }
 
     public boolean injectKeyEvent(int action, int keyCode, int metaState, int displayId) {
@@ -101,17 +115,20 @@ public final class InputManagerWrapper {
         MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
         coords.x = x;
         coords.y = y;
-        coords.pressure = pressure;
-        coords.size = 1f;
+        coords.pressure = pressure > 0 ? pressure : 1f;
+        coords.size = 0.1f;
 
         MotionEvent event = MotionEvent.obtain(
                 downTime, now, action,
-                1, new MotionEvent.PointerProperties[]{props},
+                1,
+                new MotionEvent.PointerProperties[]{props},
                 new MotionEvent.PointerCoords[]{coords},
-                0, 0, 1f, 1f, 0, 0,
+                0, 0, 1f, 1f,
+                -1, 0,
                 InputDevice.SOURCE_TOUCHSCREEN, 0);
 
         boolean ok = injectEvent(event, displayId, INJECT_MODE_ASYNC);
+        Ln.d("touch action=" + action + " (" + x + "," + y + ") displayId=" + displayId + " ok=" + ok);
         event.recycle();
         return ok;
     }
@@ -131,9 +148,11 @@ public final class InputManagerWrapper {
 
         MotionEvent event = MotionEvent.obtain(
                 now, now, MotionEvent.ACTION_SCROLL,
-                1, new MotionEvent.PointerProperties[]{props},
+                1,
+                new MotionEvent.PointerProperties[]{props},
                 new MotionEvent.PointerCoords[]{coords},
-                0, 0, 1f, 1f, 0, 0,
+                0, 0, 1f, 1f,
+                -1, 0,
                 InputDevice.SOURCE_TOUCHSCREEN, 0);
 
         boolean ok = injectEvent(event, displayId, INJECT_MODE_ASYNC);
