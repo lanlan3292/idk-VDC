@@ -8,6 +8,7 @@ import java.io.DataOutputStream
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 class BackendClient(
@@ -42,6 +43,7 @@ class BackendClient(
     private var input: DataInputStream? = null
     private var output: DataOutputStream? = null
     private val connected = AtomicBoolean(false)
+    private val ioExecutor = Executors.newSingleThreadExecutor()
 
     val isConnected: Boolean get() = connected.get()
 
@@ -124,44 +126,54 @@ class BackendClient(
 
     fun injectTouch(action: Int, x: Float, y: Float, pointerId: Int = 0,
                     pressure: Float = 1f, downTime: Long = 0L) {
-        if (!connected.get()) return
-        try {
-            synchronized(this) {
-                val out = output ?: return
-                out.writeByte(MSG_INJECT_TOUCH)
-                out.writeInt(action)
-                out.writeFloat(x)
-                out.writeFloat(y)
-                out.writeInt(pointerId)
-                out.writeFloat(pressure)
-                out.writeLong(downTime)
-                out.flush()
-                val inp = input ?: return
-                val type = inp.readByte().toInt() and 0xFF
-                if (type == MSG_ERROR) readString(inp)
+        if (!connected.get()) {
+            Log.w(TAG, "injectTouch skipped: not connected")
+            return
+        }
+        ioExecutor.execute {
+            try {
+                synchronized(this@BackendClient) {
+                    val out = output ?: return@execute
+                    out.writeByte(MSG_INJECT_TOUCH)
+                    out.writeInt(action)
+                    out.writeFloat(x)
+                    out.writeFloat(y)
+                    out.writeInt(pointerId)
+                    out.writeFloat(pressure)
+                    out.writeLong(downTime)
+                    out.flush()
+                    val inp = input ?: return@execute
+                    val type = inp.readByte().toInt() and 0xFF
+                    if (type == MSG_ERROR) {
+                        Log.w(TAG, "injectTouch server error: ${readString(inp)}")
+                    }
+                }
+                Log.d(TAG, "injectTouch action=$action ($x,$y) sent")
+            } catch (e: Exception) {
+                Log.w(TAG, "injectTouch error: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "injectTouch error: ${e.message}")
         }
     }
 
     fun injectScroll(x: Float, y: Float, hScroll: Float, vScroll: Float) {
         if (!connected.get()) return
-        try {
-            synchronized(this) {
-                val out = output ?: return
-                out.writeByte(MSG_INJECT_SCROLL)
-                out.writeFloat(x)
-                out.writeFloat(y)
-                out.writeFloat(hScroll)
-                out.writeFloat(vScroll)
-                out.flush()
-                val inp = input ?: return
-                val type = inp.readByte().toInt() and 0xFF
-                if (type == MSG_ERROR) readString(inp)
+        ioExecutor.execute {
+            try {
+                synchronized(this@BackendClient) {
+                    val out = output ?: return@execute
+                    out.writeByte(MSG_INJECT_SCROLL)
+                    out.writeFloat(x)
+                    out.writeFloat(y)
+                    out.writeFloat(hScroll)
+                    out.writeFloat(vScroll)
+                    out.flush()
+                    val inp = input ?: return@execute
+                    val type = inp.readByte().toInt() and 0xFF
+                    if (type == MSG_ERROR) readString(inp)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "injectScroll error: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "injectScroll error: ${e.message}")
         }
     }
 
