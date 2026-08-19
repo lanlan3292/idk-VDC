@@ -13,9 +13,17 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * H.264/H.265 encoder aligned with scrcpy:
+ * - ordered AUs, never drop mid-GOP P-frames
+ * - on backlog: wait for keyframe then flush
+ * - KEY_LATENCY=0, PRIORITY realtime, REPEAT_PREVIOUS_FRAME_AFTER, max-bframes=0
+ */
 public final class VideoEncoder {
 
-    private static final int MAX_QUEUED = 3;
+    private static final int MAX_QUEUED = 30;
+    private static final int DEFAULT_I_FRAME_INTERVAL = 5;
+    private static final long REPEAT_FRAME_DELAY_US = 100_000L;
 
     private final String mime;
     private final int width;
@@ -28,6 +36,7 @@ public final class VideoEncoder {
     private final ConcurrentLinkedQueue<byte[]> frameQueue = new ConcurrentLinkedQueue<>();
     private final AtomicInteger queued = new AtomicInteger(0);
     private volatile byte[] codecConfig;
+    private final AtomicBoolean dropUntilKey = new AtomicBoolean(false);
 
     public VideoEncoder(int streamMode, int width, int height) {
         this.mime = streamMode == Protocol.STREAM_H265
@@ -41,15 +50,39 @@ public final class VideoEncoder {
         MediaFormat format = MediaFormat.createVideoFormat(mime, width, height);
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
                 MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-        int bitrate = Math.min(6_000_000, Math.max(1_500_000, width * height));
+
+        int bitrate = Math.min(8_000_000, Math.max(2_000_000, width * height * 4));
         format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
-        format.setInteger(MediaFormat.KEY_FRAME_RATE, 30);
-        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
-        if (Build.VERSION.SDK_INT >= 29) {
-            format.setInteger(MediaFormat.KEY_MAX_FPS_TO_ENCODER, 30);
-        }
+        format.setInteger(MediaFormat.KEY_FRAME_RATE, 60);
+        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, DEFAULT_I_FRAME_INTERVAL);
+
+        try {
+            format.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, REPEAT_FRAME_DELAY_US);
+        } catch (Exception ignored) {}
+
         if (Build.VERSION.SDK_INT >= 23) {
             format.setInteger(MediaFormat.KEY_PRIORITY, 0);
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            try {
+                format.setInteger(MediaFormat.KEY_LATENCY, 0);
+            } catch (Exception ignored) {}
+        }
+        try {
+            format.setInteger("max-bframes", 0);
+        } catch (Exception ignored) {}
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                format.setInteger(MediaFormat.KEY_MAX_FPS_TO_ENCODER, 60);
+            } catch (Exception ignored) {}
+        }
+        if (MediaFormat.MIMETYPE_VIDEO_AVC.equals(mime)) {
+            try {
+                format.setInteger(MediaFormat.KEY_PROFILE,
+                        MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline);
+                format.setInteger(MediaFormat.KEY_LEVEL,
+                        MediaCodecInfo.CodecProfileLevel.AVCLevel31);
+            } catch (Exception ignored) {}
         }
 
         codec = MediaCodec.createEncoderByType(mime);
@@ -61,7 +94,8 @@ public final class VideoEncoder {
         drainThread = new Thread(this::drainLoop, "VdEncoderDrain");
         drainThread.setDaemon(true);
         drainThread.start();
-        Ln.i("VideoEncoder started mime=" + mime + " " + width + "x" + height + " br=" + bitrate);
+        Ln.i("VideoEncoder scrcpy-style mime=" + mime + " " + width + "x" + height
+                + " br=" + bitrate + " iframe=" + DEFAULT_I_FRAME_INTERVAL + "s");
     }
 
     public Surface getInputSurface() {
@@ -88,19 +122,21 @@ public final class VideoEncoder {
                     buf.get(data);
 
                     boolean isConfig = (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0;
+                    boolean isKey = (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0;
+
                     if (isConfig) {
                         codecConfig = data;
+                        offer(data, true);
                     } else {
-                        boolean key = (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0;
                         byte[] au;
-                        if (key && codecConfig != null) {
+                        if (isKey && codecConfig != null) {
                             au = new byte[codecConfig.length + data.length];
                             System.arraycopy(codecConfig, 0, au, 0, codecConfig.length);
                             System.arraycopy(data, 0, au, codecConfig.length, data.length);
                         } else {
                             au = data;
                         }
-                        offer(au);
+                        offer(au, isKey);
                     }
                 }
                 codec.releaseOutputBuffer(idx, false);
@@ -111,12 +147,20 @@ public final class VideoEncoder {
         }
     }
 
-    private void offer(byte[] au) {
+    private void offer(byte[] au, boolean keyOrConfig) {
+        if (dropUntilKey.get()) {
+            if (!keyOrConfig) return;
+            frameQueue.clear();
+            queued.set(0);
+            dropUntilKey.set(false);
+            Ln.i("encoder: resume from keyframe after backlog");
+        }
+
         frameQueue.offer(au);
         int n = queued.incrementAndGet();
-        while (n > MAX_QUEUED) {
-            if (frameQueue.poll() != null) n = queued.decrementAndGet();
-            else break;
+        if (n > MAX_QUEUED) {
+            dropUntilKey.set(true);
+            Ln.w("encoder: backlog " + n + ", drop until keyframe");
         }
     }
 
