@@ -6,18 +6,14 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import com.vdcontroller.client.BackendClient
-import kotlin.math.abs
-import kotlin.math.sqrt
 
 /**
  * Maps touchpad gestures to VirtualDisplay input events.
  *
- * Rules:
- *  - Single finger move          → move virtual cursor (ACTION_MOVE while down, or hover)
- *  - Single finger tap           → click (DOWN + UP)
- *  - Single finger long-press    → long-press (DOWN held)
- *  - Press then move             → drag (DOWN + MOVE)
- *  - Two fingers move together   → scroll
+ *  - Finger down position maps absolutely onto the virtual display
+ *  - Move while held = drag
+ *  - Quick tap = click
+ *  - Two fingers = scroll
  */
 class TouchGestureHandler(
     private val client: BackendClient,
@@ -29,7 +25,6 @@ class TouchGestureHandler(
     private val touchSlop = ViewConfiguration.getTouchSlop().toFloat()
     private val longPressTimeout = ViewConfiguration.getLongPressTimeout().toLong()
 
-    // Normalized cursor position [0,1]
     private var cursorX = 0.5f
     private var cursorY = 0.5f
 
@@ -44,14 +39,12 @@ class TouchGestureHandler(
     private var downRawX = 0f
     private var downRawY = 0f
 
-    // Two-finger scroll tracking
     private var lastScrollX = 0f
     private var lastScrollY = 0f
 
     private val longPressRunnable = Runnable {
         if (isDown && !isDragging) {
             isLongPress = true
-            // Keep the finger down on the virtual display
             inject(MotionEvent.ACTION_DOWN, cursorX, cursorY, pressure = 1f)
         }
     }
@@ -71,8 +64,10 @@ class TouchGestureHandler(
                 isLongPress = false
                 isDragging = false
 
-                // Move cursor to touch position (normalized)
-                updateCursorFromTouch(event.x, event.y, viewWidth, viewHeight)
+                // Absolute map touchpad -> virtual display
+                cursorX = (event.x / viewWidth).coerceIn(0f, 1f)
+                cursorY = (event.y / viewHeight).coerceIn(0f, 1f)
+                onCursorMove(cursorX, cursorY)
                 handler.postDelayed(longPressRunnable, longPressTimeout)
                 return true
             }
@@ -80,12 +75,7 @@ class TouchGestureHandler(
             MotionEvent.ACTION_POINTER_DOWN -> {
                 pointerCount = event.pointerCount
                 handler.removeCallbacks(longPressRunnable)
-                // Switch to scroll mode
-                if (pointerCount == 2) {
-                    if (isDown && !isLongPress && !isDragging) {
-                        // Cancel potential click
-                        isDown = false
-                    }
+                if (event.pointerCount == 2) {
                     lastScrollX = (event.getX(0) + event.getX(1)) / 2f
                     lastScrollY = (event.getY(0) + event.getY(1)) / 2f
                 }
@@ -93,46 +83,35 @@ class TouchGestureHandler(
             }
 
             MotionEvent.ACTION_MOVE -> {
-                if (event.pointerCount >= 2) {
-                    // Two-finger scroll
+                if (pointerCount >= 2 && event.pointerCount >= 2) {
                     val cx = (event.getX(0) + event.getX(1)) / 2f
                     val cy = (event.getY(0) + event.getY(1)) / 2f
                     val dx = cx - lastScrollX
                     val dy = cy - lastScrollY
                     lastScrollX = cx
                     lastScrollY = cy
-
-                    // Convert pixel delta to scroll units (negative = natural)
-                    val scale = 0.02f
-                    val hScroll = -dx * scale
-                    val vScroll = -dy * scale
-                    val vx = cursorX * vdWidth()
-                    val vy = cursorY * vdHeight()
-                    client.injectScroll(vx, vy, hScroll, vScroll)
+                    val x = cursorX * vdWidth()
+                    val y = cursorY * vdHeight()
+                    client.injectScroll(x, y, -dx / 64f, -dy / 64f)
                     return true
                 }
 
-                // Single finger
                 val dx = event.x - lastX
                 val dy = event.y - lastY
                 lastX = event.x
                 lastY = event.y
 
-                val totalDx = event.x - downRawX
-                val totalDy = event.y - downRawY
-                val dist = sqrt(totalDx * totalDx + totalDy * totalDy)
-
-                if (dist > touchSlop) {
-                    handler.removeCallbacks(longPressRunnable)
-                    if (!isDragging && isDown) {
+                if (!isDragging && !isLongPress) {
+                    val totalDx = event.x - downRawX
+                    val totalDy = event.y - downRawY
+                    if (totalDx * totalDx + totalDy * totalDy > touchSlop * touchSlop) {
                         isDragging = true
-                        // Start drag: send DOWN at current cursor then MOVE
+                        handler.removeCallbacks(longPressRunnable)
                         inject(MotionEvent.ACTION_DOWN, cursorX, cursorY, pressure = 1f)
                     }
                 }
 
-                // Always move the virtual cursor
-                // Relative movement based on touchpad delta
+                // Relative cursor while moving
                 val sensX = 1.5f / viewWidth
                 val sensY = 1.5f / viewHeight
                 cursorX = (cursorX + dx * sensX).coerceIn(0f, 1f)
@@ -157,10 +136,9 @@ class TouchGestureHandler(
                 val wasDown = isDown
 
                 if (wasDragging || wasLong) {
-                    // Release
                     inject(MotionEvent.ACTION_UP, cursorX, cursorY, pressure = 0f)
                 } else if (wasDown) {
-                    // Tap = click
+                    // Tap = click at absolute position
                     inject(MotionEvent.ACTION_DOWN, cursorX, cursorY, pressure = 1f)
                     inject(MotionEvent.ACTION_UP, cursorX, cursorY, pressure = 0f)
                 }
@@ -173,13 +151,6 @@ class TouchGestureHandler(
             }
         }
         return false
-    }
-
-    private fun updateCursorFromTouch(x: Float, y: Float, vw: Float, vh: Float) {
-        // Absolute positioning mode on first touch (optional).
-        // For a classic touchpad feel we use relative; absolute can be toggled.
-        // Here: keep relative, just record start.
-        onCursorMove(cursorX, cursorY)
     }
 
     private fun inject(action: Int, nx: Float, ny: Float, pressure: Float) {
