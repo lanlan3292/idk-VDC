@@ -82,10 +82,7 @@ public final class Server {
                         int pointerId = in.readInt();
                         float pressure = in.readFloat();
                         long downTime = in.readLong();
-                        boolean ok = controller.injectTouch(action, x, y, pointerId, pressure, downTime);
-                        out.writeByte(ok ? Protocol.MSG_OK : Protocol.MSG_ERROR);
-                        if (!ok) Protocol.writeString(out, "injectTouch failed");
-                        out.flush();
+                        controller.injectTouch(action, x, y, pointerId, pressure, downTime);
                         break;
                     }
                     case Protocol.MSG_INJECT_SCROLL: {
@@ -93,10 +90,7 @@ public final class Server {
                         float y = in.readFloat();
                         float hScroll = in.readFloat();
                         float vScroll = in.readFloat();
-                        boolean ok = controller.injectScroll(x, y, hScroll, vScroll);
-                        out.writeByte(ok ? Protocol.MSG_OK : Protocol.MSG_ERROR);
-                        if (!ok) Protocol.writeString(out, "injectScroll failed");
-                        out.flush();
+                        controller.injectScroll(x, y, hScroll, vScroll);
                         break;
                     }
                     case Protocol.MSG_INJECT_KEY: {
