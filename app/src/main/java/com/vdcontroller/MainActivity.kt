@@ -8,9 +8,11 @@ import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
@@ -47,6 +49,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private var touchpadShown = false
     private var gestureHandler: TouchGestureHandler? = null
     private var frameJob: Job? = null
+    private var previewDownTime = 0L
 
     private val shizukuPermissionListener =
         Shizuku.OnRequestPermissionResultListener { _, grantResult ->
@@ -64,6 +67,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         setContentView(binding.root)
 
         binding.previewSurface.holder.addCallback(this)
+        binding.previewContainer.isClickable = true
+        binding.previewContainer.setOnTouchListener { v, event ->
+            handlePreviewTouch(v, event)
+        }
+        binding.previewSurface.isClickable = false
 
         binding.btnCreate.setOnClickListener { createVirtualDisplay() }
         binding.btnDestroy.setOnClickListener { destroyVirtualDisplay() }
@@ -292,6 +300,46 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         touchpadView = null
         touchpadShown = false
         binding.btnTouchpad.text = getString(R.string.show_touchpad)
+    }
+
+    private fun handlePreviewTouch(v: View, event: MotionEvent): Boolean {
+        val info = vdInfo ?: return false
+        val vw = v.width.toFloat()
+        val vh = v.height.toFloat()
+        if (vw <= 0 || vh <= 0) return false
+
+        val scale = minOf(vw / info.width, vh / info.height)
+        val contentW = info.width * scale
+        val contentH = info.height * scale
+        val left = (vw - contentW) / 2f
+        val top = (vh - contentH) / 2f
+
+        val lx = event.x - left
+        val ly = event.y - top
+        if (lx < 0 || ly < 0 || lx > contentW || ly > contentH) {
+            return true
+        }
+        val vdX = (lx / contentW) * info.width
+        val vdY = (ly / contentH) * info.height
+
+        val nx = (vdX / info.width).coerceIn(0f, 1f)
+        val ny = (vdY / info.height).coerceIn(0f, 1f)
+        gestureHandler?.setCursor(nx, ny)
+        updateCursorOverlay(nx, ny)
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                previewDownTime = SystemClock.uptimeMillis()
+                client.injectTouch(MotionEvent.ACTION_DOWN, vdX, vdY, 0, 1f, previewDownTime)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                client.injectTouch(MotionEvent.ACTION_MOVE, vdX, vdY, 0, 1f, previewDownTime)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                client.injectTouch(MotionEvent.ACTION_UP, vdX, vdY, 0, 0f, previewDownTime)
+            }
+        }
+        return true
     }
 
     private fun updateCursorOverlay(nx: Float, ny: Float) {
