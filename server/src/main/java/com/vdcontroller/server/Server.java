@@ -62,7 +62,9 @@ public final class Server {
                         if (id >= 0) {
                             Protocol.writeVdCreated(out, id, w, h, dpi, controller.getStreamMode());
                         } else {
-                            Protocol.writeError(out, "Failed to create VirtualDisplay");
+                            String err = controller.getLastError();
+                            if (err == null || err.isEmpty()) err = "Failed to create VirtualDisplay";
+                            Protocol.writeError(out, err);
                         }
                         break;
                     }
