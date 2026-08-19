@@ -8,12 +8,12 @@ import android.view.ViewConfiguration
 import com.vdcontroller.client.BackendClient
 
 /**
- * Classic relative touchpad -> VirtualDisplay:
- *  - Single finger move   = move virtual cursor
- *  - Tap                  = click at cursor
- *  - Long-press           = long-press at cursor
- *  - Press then move      = drag
- *  - Two fingers move     = scroll
+ * Relative touchpad -> VirtualDisplay:
+ *  - Finger move (no long-press) = move virtual cursor only (no inject)
+ *  - Tap                       = click at cursor
+ *  - Long-press                = ACTION_DOWN at cursor
+ *  - Long-press then move      = drag (MOVE)
+ *  - Two fingers move          = scroll
  */
 class TouchGestureHandler(
     private val client: BackendClient,
@@ -22,7 +22,6 @@ class TouchGestureHandler(
     private val onCursorMove: (normX: Float, normY: Float) -> Unit
 ) {
     private val handler = Handler(Looper.getMainLooper())
-    private val touchSlop = ViewConfiguration.getTouchSlop().toFloat()
     private val longPressTimeout = ViewConfiguration.getLongPressTimeout().toLong()
 
     private var cursorX = 0.5f
@@ -31,19 +30,16 @@ class TouchGestureHandler(
     private var downTime = 0L
     private var isDown = false
     private var isLongPress = false
-    private var isDragging = false
     private var pointerCount = 0
 
     private var lastX = 0f
     private var lastY = 0f
-    private var downRawX = 0f
-    private var downRawY = 0f
 
     private var lastScrollX = 0f
     private var lastScrollY = 0f
 
     private val longPressRunnable = Runnable {
-        if (isDown && !isDragging) {
+        if (isDown && !isLongPress) {
             isLongPress = true
             inject(MotionEvent.ACTION_DOWN, cursorX, cursorY, pressure = 1f)
         }
@@ -55,14 +51,11 @@ class TouchGestureHandler(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 pointerCount = 1
-                downRawX = event.x
-                downRawY = event.y
                 lastX = event.x
                 lastY = event.y
                 downTime = SystemClock.uptimeMillis()
                 isDown = true
                 isLongPress = false
-                isDragging = false
                 onCursorMove(cursorX, cursorY)
                 handler.postDelayed(longPressRunnable, longPressTimeout)
                 return true
@@ -97,23 +90,13 @@ class TouchGestureHandler(
                 lastX = event.x
                 lastY = event.y
 
-                if (!isDragging && !isLongPress) {
-                    val totalDx = event.x - downRawX
-                    val totalDy = event.y - downRawY
-                    if (totalDx * totalDx + totalDy * totalDy > touchSlop * touchSlop) {
-                        isDragging = true
-                        handler.removeCallbacks(longPressRunnable)
-                        inject(MotionEvent.ACTION_DOWN, cursorX, cursorY, pressure = 1f)
-                    }
-                }
-
                 val sensX = 1.2f / viewWidth
                 val sensY = 1.2f / viewHeight
                 cursorX = (cursorX + dx * sensX).coerceIn(0f, 1f)
                 cursorY = (cursorY + dy * sensY).coerceIn(0f, 1f)
                 onCursorMove(cursorX, cursorY)
 
-                if (isDragging || isLongPress) {
+                if (isLongPress) {
                     inject(MotionEvent.ACTION_MOVE, cursorX, cursorY, pressure = 1f)
                 }
                 return true
@@ -126,11 +109,10 @@ class TouchGestureHandler(
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 handler.removeCallbacks(longPressRunnable)
-                val wasDragging = isDragging
                 val wasLong = isLongPress
                 val wasDown = isDown
 
-                if (wasDragging || wasLong) {
+                if (wasLong) {
                     inject(MotionEvent.ACTION_UP, cursorX, cursorY, pressure = 0f)
                 } else if (wasDown) {
                     inject(MotionEvent.ACTION_DOWN, cursorX, cursorY, pressure = 1f)
@@ -139,7 +121,6 @@ class TouchGestureHandler(
 
                 isDown = false
                 isLongPress = false
-                isDragging = false
                 pointerCount = 0
                 return true
             }
