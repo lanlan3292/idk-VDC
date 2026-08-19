@@ -1,7 +1,9 @@
 package com.vdcontroller.launcher
 
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.os.Build
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -52,17 +54,51 @@ class AppListAdapter(
 
 object AppLoader {
     fun loadLaunchableApps(pm: PackageManager): List<AppItem> {
-        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
-            addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        val intent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
         }
-        val resolveList = pm.queryIntentActivities(intent, 0)
-        return resolveList.mapNotNull { ri ->
-            val ai = ri.activityInfo?.applicationInfo ?: return@mapNotNull null
-            AppItem(
+        val flags = if (Build.VERSION.SDK_INT >= 23) PackageManager.MATCH_ALL else 0
+        val resolveList = try {
+            pm.queryIntentActivities(intent, flags)
+        } catch (_: Exception) {
+            pm.queryIntentActivities(intent, 0)
+        }
+
+        val byPkg = LinkedHashMap<String, AppItem>()
+        for (ri in resolveList) {
+            val ai = ri.activityInfo?.applicationInfo ?: continue
+            val pkg = ai.packageName
+            if (pkg in byPkg) continue
+            byPkg[pkg] = AppItem(
                 label = ri.loadLabel(pm).toString(),
-                packageName = ai.packageName,
+                packageName = pkg,
                 info = ai
             )
-        }.sortedBy { it.label.lowercase() }
+        }
+
+        try {
+            val installed = if (Build.VERSION.SDK_INT >= 33) {
+                pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getInstalledApplications(0)
+            }
+            for (ai in installed) {
+                if (ai.packageName in byPkg) continue
+                if (!ai.enabled) continue
+                val label = try {
+                    pm.getApplicationLabel(ai).toString()
+                } catch (_: Exception) {
+                    ai.packageName
+                }
+                val launch = pm.getLaunchIntentForPackage(ai.packageName)
+                if (launch != null) {
+                    byPkg[ai.packageName] = AppItem(label, ai.packageName, ai)
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        return byPkg.values.sortedBy { it.label.lowercase() }
     }
 }
