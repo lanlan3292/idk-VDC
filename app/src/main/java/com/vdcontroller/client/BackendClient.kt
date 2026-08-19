@@ -137,12 +137,10 @@ class BackendClient(
         }
     }
 
+    /** Fire-and-forget: no server ACK (avoids multi-touch RTT queue). */
     fun injectTouch(action: Int, x: Float, y: Float, pointerId: Int = 0,
                     pressure: Float = 1f, downTime: Long = 0L) {
-        if (!connected.get()) {
-            Log.w(TAG, "injectTouch skipped: not connected")
-            return
-        }
+        if (!connected.get()) return
         ioExecutor.execute {
             try {
                 synchronized(this@BackendClient) {
@@ -155,11 +153,6 @@ class BackendClient(
                     out.writeFloat(pressure)
                     out.writeLong(downTime)
                     out.flush()
-                    val inp = input ?: return@execute
-                    val type = inp.readByte().toInt() and 0xFF
-                    if (type == MSG_ERROR) {
-                        Log.w(TAG, "injectTouch server error: ${readString(inp)}")
-                    }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "injectTouch error: ${e.message}")
@@ -179,9 +172,6 @@ class BackendClient(
                     out.writeFloat(hScroll)
                     out.writeFloat(vScroll)
                     out.flush()
-                    val inp = input ?: return@execute
-                    val type = inp.readByte().toInt() and 0xFF
-                    if (type == MSG_ERROR) readString(inp)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "injectScroll error: ${e.message}")
