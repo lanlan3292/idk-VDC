@@ -18,13 +18,15 @@ public final class VirtualDisplayFactory {
 
     private static final int FLAG_PUBLIC = 1;
     private static final int FLAG_OWN_CONTENT_ONLY = 1 << 3;
+    private static final int FLAG_SUPPORTS_TOUCH = 1 << 6;
+    private static final int FLAG_TRUSTED = 1 << 10;
     private static final int FLAG_OWN_FOCUS = 1 << 14;
 
     private VirtualDisplayFactory() {}
 
     public static int defaultFlags() {
-        int flags = FLAG_PUBLIC | FLAG_OWN_CONTENT_ONLY;
-        if (Build.VERSION.SDK_INT >= 34) flags |= FLAG_OWN_FOCUS;
+        int flags = FLAG_PUBLIC | FLAG_OWN_CONTENT_ONLY | FLAG_SUPPORTS_TOUCH | FLAG_TRUSTED;
+        if (Build.VERSION.SDK_INT >= 33) flags |= FLAG_OWN_FOCUS;
         return flags;
     }
 
@@ -38,15 +40,12 @@ public final class VirtualDisplayFactory {
         vd = tryDisplayManagerGlobal(name, w, h, density, surface, flags, handler);
         if (vd != null) return vd;
 
-        vd = tryIDisplayManager(name, w, h, density, surface, flags, handler);
-        if (vd != null) return vd;
-
         if (Build.VERSION.SDK_INT >= 34) {
             vd = tryConfig(name, w, h, density, surface, flags, handler);
             if (vd != null) return vd;
         }
 
-        int simple = FLAG_PUBLIC | FLAG_OWN_CONTENT_ONLY;
+        int simple = FLAG_PUBLIC | FLAG_OWN_CONTENT_ONLY | FLAG_SUPPORTS_TOUCH | FLAG_TRUSTED;
         if (flags != simple) {
             Ln.i("Retry with simple flags=" + simple);
             return create(name, w, h, density, surface, simple, handler);
@@ -59,20 +58,13 @@ public final class VirtualDisplayFactory {
                                                            Surface surface, int flags, Handler handler) {
         try {
             Context ctx = Workarounds.getDisplayContext();
-            if (ctx == null) {
-                Ln.w("No display Context from Workarounds");
-                return null;
-            }
+            if (ctx == null) return null;
             Ln.i("displayContext.package=" + ctx.getPackageName());
             Object dm = ctx.getSystemService("display");
             if (dm == null) return null;
-            Ln.i("Context DisplayManager: " + dm.getClass().getName());
             try {
                 java.lang.reflect.Field f = dm.getClass().getDeclaredField("mContext");
                 f.setAccessible(true);
-                Object oldCtx = f.get(dm);
-                String oldPkg = oldCtx instanceof Context ? ((Context) oldCtx).getPackageName() : String.valueOf(oldCtx);
-                Ln.i("DM.mContext was package=" + oldPkg);
                 f.set(dm, ctx);
                 Ln.i("DM.mContext patched to " + ctx.getPackageName());
             } catch (Exception e) {
@@ -85,75 +77,10 @@ public final class VirtualDisplayFactory {
         }
     }
 
-    private static VirtualDisplay tryIDisplayManager(String name, int w, int h, int density,
-                                                     Surface surface, int flags, Handler handler) {
-        try {
-            Class<?> sm = Class.forName("android.os.ServiceManager");
-            Object binder = sm.getMethod("getService", String.class).invoke(null, "display");
-            if (binder == null) {
-                Ln.w("IDisplayManager binder null");
-                return null;
-            }
-            Class<?> stub = Class.forName("android.hardware.display.IDisplayManager$Stub");
-            Object idm = stub.getMethod("asInterface", android.os.IBinder.class).invoke(null, binder);
-            Ln.i("IDisplayManager: " + idm.getClass().getName());
-
-            if (Build.VERSION.SDK_INT >= 30) {
-                Class<?> configClass = Class.forName("android.hardware.display.VirtualDisplayConfig");
-                Class<?> builderClass = Class.forName("android.hardware.display.VirtualDisplayConfig$Builder");
-                Object builder = builderClass.getConstructor(String.class, int.class, int.class, int.class)
-                        .newInstance(name, w, h, density);
-                builderClass.getMethod("setFlags", int.class).invoke(builder, flags);
-                if (surface != null) {
-                    builderClass.getMethod("setSurface", Surface.class).invoke(builder, surface);
-                }
-                Object config = builderClass.getMethod("build").invoke(builder);
-                String pkg = Workarounds.getPackageName();
-                for (Method m : idm.getClass().getMethods()) {
-                    if (!"createVirtualDisplay".equals(m.getName())) continue;
-                    Class<?>[] p = m.getParameterTypes();
-                    Ln.i("IDisplayManager.createVirtualDisplay params=" + java.util.Arrays.toString(p));
-                    try {
-                        Object[] args = new Object[p.length];
-                        for (int i = 0; i < p.length; i++) {
-                            if (p[i] == configClass) args[i] = config;
-                            else if (p[i] == String.class) args[i] = pkg;
-                            else if (p[i] == Surface.class) args[i] = surface;
-                            else if (p[i] == int.class || p[i] == Integer.TYPE) args[i] = 0;
-                            else args[i] = null;
-                        }
-                        Object result = m.invoke(idm, args);
-                        Ln.i("IDisplayManager result=" + result);
-                        if (result instanceof Integer) {
-                            int displayId = (Integer) result;
-                            if (displayId >= 0) {
-                                Ln.i("IDisplayManager created displayId=" + displayId);
-                                return wrapDisplayId(displayId, surface);
-                            }
-                        }
-                        if (result instanceof VirtualDisplay) return (VirtualDisplay) result;
-                    } catch (Exception e) {
-                        Throwable c = e.getCause() != null ? e.getCause() : e;
-                        Ln.w("IDisplayManager invoke failed: " + c);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Ln.w("tryIDisplayManager failed: " + e);
-        }
-        return null;
-    }
-
-    private static VirtualDisplay wrapDisplayId(int displayId, Surface surface) {
-        Ln.w("wrapDisplayId not fully implemented for id=" + displayId);
-        return null;
-    }
-
     private static VirtualDisplay tryDisplayManagerGlobal(String name, int w, int h, int density,
                                                           Surface surface, int flags, Handler handler) {
         try {
             Object dmg = ServiceManager.getDisplayManagerGlobal();
-            Ln.i("DisplayManagerGlobal: " + dmg.getClass().getName());
             return invokeCreate(dmg, name, w, h, density, surface, flags, handler);
         } catch (Exception e) {
             Ln.w("DMG failed: " + e.getMessage());
@@ -164,11 +91,7 @@ public final class VirtualDisplayFactory {
     private static VirtualDisplay tryStringVariants(Object target, Method m, String name, int w, int h,
                                                    int density, Surface surface, int flags, Handler handler) {
         Class<?>[] p = m.getParameterTypes();
-        String[] packages = new String[] {
-            Workarounds.getPackageName(),
-            "com.android.shell",
-            null
-        };
+        String[] packages = new String[] { Workarounds.getPackageName(), "com.android.shell", null };
         String[] uniqueIds = new String[] { "vdcontroller", name, null };
         for (String pkg : packages) {
             for (String uid : uniqueIds) {
@@ -189,12 +112,11 @@ public final class VirtualDisplayFactory {
                     m.setAccessible(true);
                     Object result = m.invoke(target, args);
                     if (result instanceof VirtualDisplay) {
-                        Ln.i("OK variant pkg=" + pkg + " uniqueId=" + uid);
+                        Ln.i("OK variant pkg=" + pkg);
                         return (VirtualDisplay) result;
                     }
                 } catch (Exception e) {
-                    Throwable c = e.getCause() != null ? e.getCause() : e;
-                    Ln.d("variant fail pkg=" + pkg + ": " + c.getClass().getSimpleName());
+                    /* try next */
                 }
             }
         }
@@ -217,52 +139,14 @@ public final class VirtualDisplayFactory {
                     VirtualDisplay vd = tryStringVariants(target, m, name, w, h, density, surface, flags, handler);
                     if (vd != null) return vd;
                     result = null;
-                } else {
-                    continue;
-                }
+                } else continue;
                 if (result instanceof VirtualDisplay) {
-                    Ln.i("OK via " + target.getClass().getSimpleName() + " " + m.getName());
+                    Ln.i("OK via " + target.getClass().getSimpleName());
                     return (VirtualDisplay) result;
-                }
-                if (result != null) {
-                    Ln.w("Non-VD return: " + result.getClass().getName());
-                } else if (p.length <= 8) {
-                    Ln.w("null from " + m.toGenericString());
                 }
             } catch (Exception e) {
                 Throwable c = e.getCause() != null ? e.getCause() : e;
                 Ln.w("invoke failed: " + c);
-            }
-        }
-        for (Method m : target.getClass().getDeclaredMethods()) {
-            if (!"createVirtualDisplay".equals(m.getName())) continue;
-            try {
-                m.setAccessible(true);
-                Class<?>[] p = m.getParameterTypes();
-                if (p.length < 6 || p[0] != String.class) continue;
-                if (p.length > 8) {
-                    VirtualDisplay vd = tryStringVariants(target, m, name, w, h, density, surface, flags, handler);
-                    if (vd != null) return vd;
-                    continue;
-                }
-                Object[] args = new Object[p.length];
-                args[0] = name; args[1] = w; args[2] = h; args[3] = density;
-                args[4] = surface; args[5] = flags;
-                for (int i = 6; i < p.length; i++) {
-                    if (Handler.class.isAssignableFrom(p[i])) args[i] = handler;
-                    else if (p[i] == String.class) args[i] = Workarounds.getPackageName();
-                    else if (p[i] == int.class || p[i] == Integer.TYPE) args[i] = 0;
-                    else if (p[i] == boolean.class || p[i] == Boolean.TYPE) args[i] = false;
-                    else args[i] = null;
-                }
-                Object result = m.invoke(target, args);
-                if (result instanceof VirtualDisplay) {
-                    Ln.i("OK declared " + m.toGenericString());
-                    return (VirtualDisplay) result;
-                }
-            } catch (Exception e) {
-                Throwable c = e.getCause() != null ? e.getCause() : e;
-                Ln.w("declared invoke failed: " + c);
             }
         }
         return null;
@@ -280,11 +164,8 @@ public final class VirtualDisplayFactory {
                 builderClass.getMethod("setSurface", Surface.class).invoke(builder, surface);
             }
             Object config = builderClass.getMethod("build").invoke(builder);
-
             Context ctx = Workarounds.getDisplayContext();
-            Object target = ctx != null ? ctx.getSystemService("display") : null;
-            if (target == null) target = ServiceManager.getDisplayManagerGlobal();
-
+            Object target = ctx != null ? ctx.getSystemService("display") : ServiceManager.getDisplayManagerGlobal();
             for (Method m : target.getClass().getMethods()) {
                 if (!"createVirtualDisplay".equals(m.getName())) continue;
                 Class<?>[] p = m.getParameterTypes();
