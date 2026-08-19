@@ -8,12 +8,12 @@ import android.view.ViewConfiguration
 import com.vdcontroller.client.BackendClient
 
 /**
- * Maps touchpad gestures to VirtualDisplay input events.
- *
- *  - Finger down position maps absolutely onto the virtual display
- *  - Move while held = drag
- *  - Quick tap = click
- *  - Two fingers = scroll
+ * Classic relative touchpad -> VirtualDisplay:
+ *  - Single finger move   = move virtual cursor
+ *  - Tap                  = click at cursor
+ *  - Long-press           = long-press at cursor
+ *  - Press then move      = drag
+ *  - Two fingers move     = scroll
  */
 class TouchGestureHandler(
     private val client: BackendClient,
@@ -63,10 +63,6 @@ class TouchGestureHandler(
                 isDown = true
                 isLongPress = false
                 isDragging = false
-
-                // Absolute map touchpad -> virtual display
-                cursorX = (event.x / viewWidth).coerceIn(0f, 1f)
-                cursorY = (event.y / viewHeight).coerceIn(0f, 1f)
                 onCursorMove(cursorX, cursorY)
                 handler.postDelayed(longPressRunnable, longPressTimeout)
                 return true
@@ -92,7 +88,7 @@ class TouchGestureHandler(
                     lastScrollY = cy
                     val x = cursorX * vdWidth()
                     val y = cursorY * vdHeight()
-                    client.injectScroll(x, y, -dx / 64f, -dy / 64f)
+                    client.injectScroll(x, y, -dx / 48f, -dy / 48f)
                     return true
                 }
 
@@ -111,9 +107,8 @@ class TouchGestureHandler(
                     }
                 }
 
-                // Relative cursor while moving
-                val sensX = 1.5f / viewWidth
-                val sensY = 1.5f / viewHeight
+                val sensX = 1.2f / viewWidth
+                val sensY = 1.2f / viewHeight
                 cursorX = (cursorX + dx * sensX).coerceIn(0f, 1f)
                 cursorY = (cursorY + dy * sensY).coerceIn(0f, 1f)
                 onCursorMove(cursorX, cursorY)
@@ -138,7 +133,6 @@ class TouchGestureHandler(
                 if (wasDragging || wasLong) {
                     inject(MotionEvent.ACTION_UP, cursorX, cursorY, pressure = 0f)
                 } else if (wasDown) {
-                    // Tap = click at absolute position
                     inject(MotionEvent.ACTION_DOWN, cursorX, cursorY, pressure = 1f)
                     inject(MotionEvent.ACTION_UP, cursorX, cursorY, pressure = 0f)
                 }
