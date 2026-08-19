@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public final class VideoEncoder {
 
-    private static final int MAX_QUEUED = 45;
+    private static final int MAX_QUEUED = 3;
 
     private final String mime;
     private final int width;
