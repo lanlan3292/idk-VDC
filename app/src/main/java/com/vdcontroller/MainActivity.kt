@@ -1,6 +1,7 @@
 package com.vdcontroller
 
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -10,12 +11,17 @@ import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
+import android.widget.ArrayAdapter
+import android.widget.EditText
+import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -23,15 +29,18 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.vdcontroller.client.BackendClient
+import com.vdcontroller.client.VideoDecoder
 import com.vdcontroller.databinding.ActivityMainBinding
 import com.vdcontroller.gesture.TouchGestureHandler
 import com.vdcontroller.launcher.AppListAdapter
 import com.vdcontroller.launcher.AppLoader
 import com.vdcontroller.ui.FloatingTouchpadView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 
 class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
@@ -50,12 +59,13 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private var gestureHandler: TouchGestureHandler? = null
     private var frameJob: Job? = null
     private var previewDownTime = 0L
+    private var videoDecoder: VideoDecoder? = null
+    private lateinit var prefs: SharedPreferences
 
     private val shizukuPermissionListener =
         Shizuku.OnRequestPermissionResultListener { _, grantResult ->
             if (grantResult == 0) {
                 toast("Shizuku 已授权")
-                tryStartServerViaShizuku()
             } else {
                 toast("Shizuku 授权被拒绝")
             }
@@ -65,6 +75,16 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        prefs = getSharedPreferences("vd", MODE_PRIVATE)
+
+        val modes = arrayOf(
+            getString(R.string.stream_jpeg),
+            getString(R.string.stream_h264),
+            getString(R.string.stream_h265)
+        )
+        binding.streamModeSpinner.adapter =
+            ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, modes)
+        binding.streamModeSpinner.setSelection(prefs.getInt("stream_mode", 0).coerceIn(0, 2))
 
         binding.previewSurface.holder.addCallback(this)
         binding.previewContainer.isClickable = true
@@ -97,42 +117,70 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
     override fun surfaceDestroyed(holder: SurfaceHolder) {}
 
+    private fun setupDecoderIfNeeded(info: BackendClient.VdInfo) {
+        videoDecoder?.stop()
+        videoDecoder = null
+        if (info.streamMode == BackendClient.STREAM_H264 || info.streamMode == BackendClient.STREAM_H265) {
+            val mime = if (info.streamMode == BackendClient.STREAM_H265) "video/hevc" else "video/avc"
+            try {
+                val dec = VideoDecoder(mime, info.width, info.height)
+                val surface = binding.previewSurface.holder.surface
+                if (surface != null && surface.isValid) {
+                    dec.start(surface)
+                    videoDecoder = dec
+                } else {
+                    toast("Surface 未就绪，H.26x 将无法显示，可改用 JPEG")
+                }
+            } catch (e: Exception) {
+                toast("解码器启动失败: ${e.message}")
+            }
+        }
+    }
+
     private fun startFrameLoop() {
         frameJob?.cancel()
         frameJob = lifecycleScope.launch {
             while (isActive) {
                 try {
                     if (client.isConnected && vdInfo != null) {
-                        val jpeg = client.getFrame()
-                        if (jpeg != null) {
-                            val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
-                            if (bmp != null) {
-                                val holder = binding.previewSurface.holder
-                                val canvas = holder.lockCanvas()
-                                if (canvas != null) {
-                                    try {
-                                        canvas.drawColor(Color.BLACK)
-                                        val scale = minOf(
-                                            canvas.width / bmp.width.toFloat(),
-                                            canvas.height / bmp.height.toFloat()
-                                        )
-                                        val dw = bmp.width * scale
-                                        val dh = bmp.height * scale
-                                        val left = (canvas.width - dw) / 2f
-                                        val top = (canvas.height - dh) / 2f
-                                        canvas.drawBitmap(bmp, null, RectF(left, top, left + dw, top + dh), null)
-                                    } finally {
-                                        holder.unlockCanvasAndPost(canvas)
+                        val frame = client.getFrame()
+                        if (frame != null) {
+                            val dec = videoDecoder
+                            if (dec != null) {
+                                dec.feed(frame)
+                            } else {
+                                val bmp = BitmapFactory.decodeByteArray(frame, 0, frame.size)
+                                if (bmp != null) {
+                                    val holder = binding.previewSurface.holder
+                                    val canvas = holder.lockCanvas()
+                                    if (canvas != null) {
+                                        try {
+                                            canvas.drawColor(Color.BLACK)
+                                            val scale = minOf(
+                                                canvas.width / bmp.width.toFloat(),
+                                                canvas.height / bmp.height.toFloat()
+                                            )
+                                            val dw = bmp.width * scale
+                                            val dh = bmp.height * scale
+                                            val left = (canvas.width - dw) / 2f
+                                            val top = (canvas.height - dh) / 2f
+                                            canvas.drawBitmap(
+                                                bmp, null,
+                                                RectF(left, top, left + dw, top + dh), null
+                                            )
+                                        } finally {
+                                            holder.unlockCanvasAndPost(canvas)
+                                        }
                                     }
+                                    bmp.recycle()
                                 }
-                                bmp.recycle()
                             }
                         }
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "frame: ${e.message}")
                 }
-                delay(80)
+                delay(50)
             }
         }
     }
@@ -140,6 +188,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private fun stopFrameLoop() {
         frameJob?.cancel()
         frameJob = null
+        videoDecoder?.stop()
+        videoDecoder = null
     }
 
     private suspend fun ensureBackend(): Boolean {
@@ -147,27 +197,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             updateStatus("已连接到 Backend (ADB)")
             return true
         }
-        if (Shizuku.pingBinder()) {
-            if (Shizuku.checkSelfPermission() != 0) {
-                Shizuku.requestPermission(0)
-                updateStatus("请授权 Shizuku")
-                return false
-            }
-            tryStartServerViaShizuku()
-            repeat(10) {
-                delay(300)
-                if (client.ping()) {
-                    updateStatus("已连接到 Backend (Shizuku)")
-                    return true
-                }
-            }
-        }
         updateStatus("未连接 Backend，请先用 adb 启动 server")
         return false
-    }
-
-    private fun tryStartServerViaShizuku() {
-        toast("请用 adb 启动 vdserver（当前推荐）")
     }
 
     private fun createVirtualDisplay() {
@@ -179,9 +210,12 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             updateStatus("正在创建…")
             if (!ensureBackend()) {
                 toast("无法连接 Backend")
+                updateStatus("未连接 Backend")
                 return@launch
             }
-            val result = client.createVd(w, h, dpi)
+            val streamMode = binding.streamModeSpinner.selectedItemPosition.coerceIn(0, 2)
+            prefs.edit().putInt("stream_mode", streamMode).apply()
+            val result = client.createVd(w, h, dpi, streamMode)
             result.onSuccess { info ->
                 vdInfo = info
                 gestureHandler = TouchGestureHandler(
@@ -197,8 +231,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 binding.emptyHint.visibility = View.GONE
                 binding.cursorView.visibility = View.VISIBLE
                 updateStatus(getString(R.string.vd_created, info.displayId))
+                setupDecoderIfNeeded(info)
                 startFrameLoop()
-                toast("Virtual Display 创建成功 id=${info.displayId}")
+                toast("创建成功 id=${info.displayId}")
             }.onFailure {
                 updateStatus("创建失败: ${it.message}")
                 toast("创建失败: ${it.message}")
@@ -224,23 +259,40 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private fun showAppPicker() {
-        val apps = AppLoader.loadLaunchableApps(packageManager)
         val view = layoutInflater.inflate(R.layout.dialog_app_list, null)
         val rv = view.findViewById<RecyclerView>(R.id.appList)
+        val search = view.findViewById<EditText>(R.id.appSearch)
+        val progress = view.findViewById<ProgressBar>(R.id.appListProgress)
         rv.layoutManager = LinearLayoutManager(this)
         val dialog = AlertDialog.Builder(this)
             .setView(view)
             .setNegativeButton("取消", null)
             .create()
-        rv.adapter = AppListAdapter(packageManager) { item ->
+        val adapter = AppListAdapter(packageManager) { item ->
             dialog.dismiss()
             lifecycleScope.launch {
                 val r = client.launchApp(item.packageName)
                 r.onSuccess { toast("已启动 ${item.label}") }
                     .onFailure { toast("启动失败: ${it.message}") }
             }
-        }.also { it.submit(apps) }
+        }
+        rv.adapter = adapter
+        progress.visibility = View.VISIBLE
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                adapter.filter(s?.toString().orEmpty())
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
         dialog.show()
+        lifecycleScope.launch {
+            val apps = withContext(Dispatchers.IO) {
+                AppLoader.loadLaunchableApps(packageManager)
+            }
+            progress.visibility = View.GONE
+            adapter.submit(apps)
+        }
     }
 
     private fun toggleTouchpad() {
@@ -250,15 +302,16 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private fun showTouchpad() {
         if (!Settings.canDrawOverlays(this)) {
             toast(getString(R.string.overlay_permission))
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
+            startActivityForResult(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                ),
+                OVERLAY_PERMISSION_REQ
             )
-            startActivityForResult(intent, OVERLAY_PERMISSION_REQ)
             return
         }
         if (touchpadView != null) return
-
         if (gestureHandler == null) {
             toast("请先创建 Virtual Display")
             return
@@ -273,7 +326,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -316,12 +369,10 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         val lx = event.x - left
         val ly = event.y - top
-        if (lx < 0 || ly < 0 || lx > contentW || ly > contentH) {
-            return true
-        }
+        if (lx < 0 || ly < 0 || lx > contentW || ly > contentH) return true
+
         val vdX = (lx / contentW) * info.width
         val vdY = (ly / contentH) * info.height
-
         val nx = (vdX / info.width).coerceIn(0f, 1f)
         val ny = (vdY / info.height).coerceIn(0f, 1f)
         gestureHandler?.setCursor(nx, ny)
@@ -344,12 +395,18 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private fun updateCursorOverlay(nx: Float, ny: Float) {
         val container = binding.previewContainer
+        val info = vdInfo
         val cw = container.width
         val ch = container.height
-        if (cw <= 0 || ch <= 0) return
+        if (cw <= 0 || ch <= 0 || info == null) return
+        val scale = minOf(cw / info.width.toFloat(), ch / info.height.toFloat())
+        val contentW = info.width * scale
+        val contentH = info.height * scale
+        val left = (cw - contentW) / 2f
+        val top = (ch - contentH) / 2f
         val cursor = binding.cursorView
-        cursor.x = nx * cw - cursor.width / 2f
-        cursor.y = ny * ch - cursor.height / 2f
+        cursor.x = left + nx * contentW - cursor.width / 2f
+        cursor.y = top + ny * contentH - cursor.height / 2f
     }
 
     private fun updateStatus(msg: String) {
@@ -365,6 +422,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == OVERLAY_PERMISSION_REQ) {
             if (Settings.canDrawOverlays(this)) showTouchpad()
+            else toast("未授予悬浮窗权限")
         }
     }
 }
