@@ -182,6 +182,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     vdHeight = { info.height },
                     onCursorMove = { nx, ny -> updateCursorOverlay(nx, ny) }
                 )
+                touchpadView?.gestureHandler = gestureHandler
                 binding.btnDestroy.isEnabled = true
                 binding.btnLaunch.isEnabled = true
                 binding.btnTouchpad.isEnabled = true
@@ -203,6 +204,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             client.destroyVd()
             vdInfo = null
             gestureHandler = null
+            touchpadView?.gestureHandler = null
             hideTouchpad()
             binding.btnDestroy.isEnabled = false
             binding.btnLaunch.isEnabled = false
@@ -249,6 +251,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
         if (touchpadView != null) return
 
+        if (gestureHandler == null) {
+            toast("请先创建 Virtual Display")
+            return
+        }
+
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val params = WindowManager.LayoutParams(
             600, 400,
@@ -258,7 +265,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                    or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
