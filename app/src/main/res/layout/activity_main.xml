@@ -6,7 +6,6 @@
     android:layout_height="match_parent"
     android:background="#121212">
 
-    <!-- Virtual Display Preview -->
     <FrameLayout
         android:id="@+id/previewContainer"
         android:layout_width="0dp"
@@ -23,7 +22,6 @@
             android:layout_height="match_parent"
             android:layout_gravity="center" />
 
-        <!-- Virtual cursor overlay -->
         <View
             android:id="@+id/cursorView"
             android:layout_width="16dp"
@@ -42,7 +40,6 @@
             android:gravity="center" />
     </FrameLayout>
 
-    <!-- Control Panel -->
     <LinearLayout
         android:id="@+id/controlPanel"
         android:layout_width="0dp"
@@ -63,12 +60,32 @@
             android:textSize="13sp"
             android:paddingBottom="8dp" />
 
-        <!-- Size inputs -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical">
+            android:gravity="center_vertical"
+            android:paddingBottom="6dp">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="画面流"
+                android:textColor="#CCCCCC"
+                android:paddingEnd="12dp" />
+            <Spinner
+                android:id="@+id/streamModeSpinner"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="#333333"
+                android:padding="8dp"
+                android:popupBackground="#2A2A2A" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
 
             <com.google.android.material.textfield.TextInputLayout
                 android:layout_width="0dp"
@@ -89,7 +106,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginStart="8dp"
+                android:layout_marginStart="6dp"
                 android:hint="@string/height"
                 style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense">
                 <com.google.android.material.textfield.TextInputEditText
@@ -105,7 +122,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginStart="8dp"
+                android:layout_marginStart="6dp"
                 android:hint="@string/dpi"
                 style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense">
                 <com.google.android.material.textfield.TextInputEditText
@@ -118,7 +135,6 @@
             </com.google.android.material.textfield.TextInputLayout>
         </LinearLayout>
 
-        <!-- Buttons row 1 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -144,7 +160,6 @@
                 android:enabled="false" />
         </LinearLayout>
 
-        <!-- Buttons row 2 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
