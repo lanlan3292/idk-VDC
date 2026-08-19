@@ -35,9 +35,19 @@ class BackendClient(
         const val MSG_PONG = 23
         const val MSG_OK = 24
         const val MSG_FRAME = 25
+
+        const val STREAM_JPEG = 0
+        const val STREAM_H264 = 1
+        const val STREAM_H265 = 2
     }
 
-    data class VdInfo(val displayId: Int, val width: Int, val height: Int, val dpi: Int)
+    data class VdInfo(
+        val displayId: Int,
+        val width: Int,
+        val height: Int,
+        val dpi: Int,
+        val streamMode: Int = 0
+    )
 
     private var socket: Socket? = null
     private var input: DataInputStream? = null
@@ -54,6 +64,7 @@ class BackendClient(
             val s = Socket()
             s.connect(InetSocketAddress(host, port), 3000)
             s.tcpNoDelay = true
+            s.soTimeout = 15000
             socket = s
             input = DataInputStream(s.getInputStream())
             output = DataOutputStream(s.getOutputStream())
@@ -78,7 +89,7 @@ class BackendClient(
         socket = null
     }
 
-    suspend fun createVd(width: Int, height: Int, dpi: Int): Result<VdInfo> =
+    suspend fun createVd(width: Int, height: Int, dpi: Int, streamMode: Int = STREAM_JPEG): Result<VdInfo> =
         withContext(Dispatchers.IO) {
             ensureConnected()
             val out = output ?: return@withContext Result.failure(IOException("not connected"))
@@ -89,6 +100,7 @@ class BackendClient(
                     out.writeInt(width)
                     out.writeInt(height)
                     out.writeInt(dpi)
+                    out.writeInt(streamMode)
                     out.flush()
                     when (val type = inp.readByte().toInt() and 0xFF) {
                         MSG_VD_CREATED -> {
@@ -96,7 +108,8 @@ class BackendClient(
                             val w = inp.readInt()
                             val h = inp.readInt()
                             val d = inp.readInt()
-                            Result.success(VdInfo(id, w, h, d))
+                            val sm = try { inp.readInt() } catch (_: Exception) { streamMode }
+                            Result.success(VdInfo(id, w, h, d, sm))
                         }
                         MSG_ERROR -> Result.failure(IOException(readString(inp)))
                         else -> Result.failure(IOException("unexpected response $type"))
@@ -148,7 +161,6 @@ class BackendClient(
                         Log.w(TAG, "injectTouch server error: ${readString(inp)}")
                     }
                 }
-                Log.d(TAG, "injectTouch action=$action ($x,$y) sent")
             } catch (e: Exception) {
                 Log.w(TAG, "injectTouch error: ${e.message}")
             }
