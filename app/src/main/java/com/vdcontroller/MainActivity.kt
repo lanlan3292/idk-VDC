@@ -237,7 +237,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 binding.btnLaunch.isEnabled = true
                 binding.btnTouchpad.isEnabled = true
                 binding.emptyHint.visibility = View.GONE
-                binding.cursorView.visibility = View.VISIBLE
+                binding.cursorView.visibility = View.GONE
                 updateStatus(getString(R.string.vd_created, info.displayId))
                 layoutPreviewSurface(info.width, info.height)
                 setupDecoderIfNeeded(info)
@@ -339,6 +339,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         wm.addView(tp, params)
         touchpadView = tp
         touchpadShown = true
+        binding.cursorView.visibility = View.VISIBLE
         binding.btnTouchpad.text = getString(R.string.hide_touchpad)
     }
 
@@ -348,6 +349,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
         touchpadView = null
         touchpadShown = false
+        binding.cursorView.visibility = View.GONE
         binding.btnTouchpad.text = getString(R.string.show_touchpad)
     }
 
@@ -375,29 +377,28 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 previewDownTime = SystemClock.uptimeMillis()
                 val mapped = mapPointer(0) ?: return true
                 val (vdX, vdY) = mapped
-                val nx = (vdX / info.width).coerceIn(0f, 1f)
-                val ny = (vdY / info.height).coerceIn(0f, 1f)
-                gestureHandler?.setCursor(nx, ny)
-                updateCursorOverlay(nx, ny)
-                client.injectTouch(MotionEvent.ACTION_DOWN, vdX, vdY, event.getPointerId(0), 1f, previewDownTime)
+                client.injectTouch(
+                    MotionEvent.ACTION_DOWN, vdX, vdY,
+                    event.getPointerId(0), 1f, previewDownTime
+                )
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 val idx = event.actionIndex
                 val mapped = mapPointer(idx) ?: return true
                 val (vdX, vdY) = mapped
-                client.injectTouch(MotionEvent.ACTION_POINTER_DOWN, vdX, vdY, event.getPointerId(idx), 1f, previewDownTime)
+                client.injectTouch(
+                    MotionEvent.ACTION_POINTER_DOWN, vdX, vdY,
+                    event.getPointerId(idx), 1f, previewDownTime
+                )
             }
             MotionEvent.ACTION_MOVE -> {
                 for (i in 0 until event.pointerCount) {
                     val mapped = mapPointer(i) ?: continue
                     val (vdX, vdY) = mapped
-                    if (i == 0) {
-                        val nx = (vdX / info.width).coerceIn(0f, 1f)
-                        val ny = (vdY / info.height).coerceIn(0f, 1f)
-                        gestureHandler?.setCursor(nx, ny)
-                        updateCursorOverlay(nx, ny)
-                    }
-                    client.injectTouch(MotionEvent.ACTION_MOVE, vdX, vdY, event.getPointerId(i), 1f, previewDownTime)
+                    client.injectTouch(
+                        MotionEvent.ACTION_MOVE, vdX, vdY,
+                        event.getPointerId(i), 1f, previewDownTime
+                    )
                 }
             }
             MotionEvent.ACTION_POINTER_UP -> {
