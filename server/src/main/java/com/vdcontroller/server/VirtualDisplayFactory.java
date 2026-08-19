@@ -17,6 +17,7 @@ import java.lang.reflect.Method;
 public final class VirtualDisplayFactory {
 
     private static final int FLAG_PUBLIC = 1;
+    private static final int FLAG_PRESENTATION = 1 << 1;
     private static final int FLAG_OWN_CONTENT_ONLY = 1 << 3;
     private static final int FLAG_SUPPORTS_TOUCH = 1 << 6;
     private static final int FLAG_TRUSTED = 1 << 10;
@@ -34,31 +35,51 @@ public final class VirtualDisplayFactory {
                                         Surface surface, int flags, Handler handler) throws Exception {
         Ln.i("VirtualDisplayFactory.create flags=" + flags);
 
-        VirtualDisplay vd = tryContextDisplayManager(name, w, h, density, surface, flags, handler);
-        if (vd != null) return vd;
+        Exception last = null;
+        int[] flagAttempts = new int[] {
+                flags,
+                FLAG_PUBLIC | FLAG_OWN_CONTENT_ONLY | FLAG_SUPPORTS_TOUCH | FLAG_TRUSTED,
+                FLAG_PUBLIC | FLAG_OWN_CONTENT_ONLY | FLAG_SUPPORTS_TOUCH,
+                FLAG_PUBLIC | FLAG_OWN_CONTENT_ONLY | FLAG_TRUSTED,
+                FLAG_PUBLIC | FLAG_OWN_CONTENT_ONLY,
+                FLAG_PUBLIC | FLAG_PRESENTATION,
+                FLAG_PUBLIC
+        };
 
-        vd = tryDisplayManagerGlobal(name, w, h, density, surface, flags, handler);
-        if (vd != null) return vd;
+        java.util.LinkedHashSet<Integer> attempts = new java.util.LinkedHashSet<>();
+        for (int f : flagAttempts) attempts.add(f);
 
-        if (Build.VERSION.SDK_INT >= 34) {
-            vd = tryConfig(name, w, h, density, surface, flags, handler);
-            if (vd != null) return vd;
+        for (int f : attempts) {
+            Ln.i("Trying flags=" + f);
+            try {
+                VirtualDisplay vd = tryContextDisplayManager(name, w, h, density, surface, f, handler);
+                if (vd != null) return vd;
+
+                vd = tryDisplayManagerGlobal(name, w, h, density, surface, f, handler);
+                if (vd != null) return vd;
+
+                if (Build.VERSION.SDK_INT >= 30) {
+                    vd = tryConfig(name, w, h, density, surface, f, handler);
+                    if (vd != null) return vd;
+                }
+            } catch (Exception e) {
+                last = e;
+                Ln.w("flags=" + f + " failed: " + e.getMessage());
+            }
         }
 
-        int simple = FLAG_PUBLIC | FLAG_OWN_CONTENT_ONLY | FLAG_SUPPORTS_TOUCH | FLAG_TRUSTED;
-        if (flags != simple) {
-            Ln.i("Retry with simple flags=" + simple);
-            return create(name, w, h, density, surface, simple, handler);
-        }
-
-        throw new IllegalStateException("createVirtualDisplay failed on all paths");
+        if (last != null) throw last;
+        throw new IllegalStateException("createVirtualDisplay failed on all flag/paths");
     }
 
     private static VirtualDisplay tryContextDisplayManager(String name, int w, int h, int density,
                                                            Surface surface, int flags, Handler handler) {
         try {
             Context ctx = Workarounds.getDisplayContext();
-            if (ctx == null) return null;
+            if (ctx == null) {
+                Ln.w("No display Context");
+                return null;
+            }
             Ln.i("displayContext.package=" + ctx.getPackageName());
             Object dm = ctx.getSystemService("display");
             if (dm == null) return null;
@@ -66,9 +87,8 @@ public final class VirtualDisplayFactory {
                 java.lang.reflect.Field f = dm.getClass().getDeclaredField("mContext");
                 f.setAccessible(true);
                 f.set(dm, ctx);
-                Ln.i("DM.mContext patched to " + ctx.getPackageName());
             } catch (Exception e) {
-                Ln.w("patch DM.mContext failed: " + e.getMessage());
+                Ln.w("patch DM.mContext: " + e.getMessage());
             }
             return invokeCreate(dm, name, w, h, density, surface, flags, handler);
         } catch (Exception e) {
@@ -112,11 +132,10 @@ public final class VirtualDisplayFactory {
                     m.setAccessible(true);
                     Object result = m.invoke(target, args);
                     if (result instanceof VirtualDisplay) {
-                        Ln.i("OK variant pkg=" + pkg);
+                        Ln.i("OK variant pkg=" + pkg + " flags=" + flags);
                         return (VirtualDisplay) result;
                     }
-                } catch (Exception e) {
-                    /* try next */
+                } catch (Exception ignored) {
                 }
             }
         }
@@ -138,10 +157,12 @@ public final class VirtualDisplayFactory {
                 } else if (p.length >= 6 && p[0] == String.class) {
                     VirtualDisplay vd = tryStringVariants(target, m, name, w, h, density, surface, flags, handler);
                     if (vd != null) return vd;
-                    result = null;
-                } else continue;
+                    continue;
+                } else {
+                    continue;
+                }
                 if (result instanceof VirtualDisplay) {
-                    Ln.i("OK via " + target.getClass().getSimpleName());
+                    Ln.i("OK via " + target.getClass().getSimpleName() + " flags=" + flags);
                     return (VirtualDisplay) result;
                 }
             } catch (Exception e) {
@@ -179,7 +200,7 @@ public final class VirtualDisplayFactory {
                 }
                 Object result = m.invoke(target, args);
                 if (result instanceof VirtualDisplay) {
-                    Ln.i("OK VirtualDisplayConfig");
+                    Ln.i("OK VirtualDisplayConfig flags=" + flags);
                     return (VirtualDisplay) result;
                 }
             }
