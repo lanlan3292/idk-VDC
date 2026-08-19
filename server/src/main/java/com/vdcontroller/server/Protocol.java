@@ -25,6 +25,10 @@ public final class Protocol {
     public static final byte MSG_OK            = 24;
     public static final byte MSG_FRAME         = 25;
 
+    public static final int STREAM_JPEG = 0;
+    public static final int STREAM_H264 = 1;
+    public static final int STREAM_H265 = 2;
+
     private Protocol() {}
 
     public static void writeString(DataOutputStream out, String s) throws IOException {
@@ -51,13 +55,14 @@ public final class Protocol {
         out.flush();
     }
 
-    public static void writeVdCreated(DataOutputStream out, int displayId, int w, int h, int dpi)
+    public static void writeVdCreated(DataOutputStream out, int displayId, int w, int h, int dpi, int streamMode)
             throws IOException {
         out.writeByte(MSG_VD_CREATED);
         out.writeInt(displayId);
         out.writeInt(w);
         out.writeInt(h);
         out.writeInt(dpi);
+        out.writeInt(streamMode);
         out.flush();
     }
 }

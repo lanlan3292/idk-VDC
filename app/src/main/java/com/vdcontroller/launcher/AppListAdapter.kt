@@ -23,23 +23,39 @@ class AppListAdapter(
     private val onClick: (AppItem) -> Unit
 ) : RecyclerView.Adapter<AppListAdapter.VH>() {
 
+    private val allItems = mutableListOf<AppItem>()
     private val items = mutableListOf<AppItem>()
 
     fun submit(list: List<AppItem>) {
+        allItems.clear()
+        allItems.addAll(list)
+        filter("")
+    }
+
+    fun filter(query: String) {
+        val q = query.trim().lowercase()
         items.clear()
-        items.addAll(list)
+        if (q.isEmpty()) {
+            items.addAll(allItems)
+        } else {
+            for (item in allItems) {
+                if (item.label.lowercase().contains(q) || item.packageName.lowercase().contains(q)) {
+                    items.add(item)
+                }
+            }
+        }
         notifyDataSetChanged()
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-        val v = LayoutInflater.from(parent.context)
-            .inflate(R.layout.item_app, parent, false)
+        val v = LayoutInflater.from(parent.context).inflate(R.layout.item_app, parent, false)
         return VH(v)
     }
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val item = items[position]
         holder.name.text = item.label
+        holder.pkg.text = item.packageName
         holder.icon.setImageDrawable(item.info.loadIcon(pm))
         holder.itemView.setOnClickListener { onClick(item) }
     }
@@ -49,6 +65,7 @@ class AppListAdapter(
     class VH(v: View) : RecyclerView.ViewHolder(v) {
         val icon: ImageView = v.findViewById(R.id.appIcon)
         val name: TextView = v.findViewById(R.id.appName)
+        val pkg: TextView = v.findViewById(R.id.appPackage)
     }
 }
 
@@ -63,7 +80,6 @@ object AppLoader {
         } catch (_: Exception) {
             pm.queryIntentActivities(intent, 0)
         }
-
         val byPkg = LinkedHashMap<String, AppItem>()
         for (ri in resolveList) {
             val ai = ri.activityInfo?.applicationInfo ?: continue
@@ -75,30 +91,6 @@ object AppLoader {
                 info = ai
             )
         }
-
-        try {
-            val installed = if (Build.VERSION.SDK_INT >= 33) {
-                pm.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.getInstalledApplications(0)
-            }
-            for (ai in installed) {
-                if (ai.packageName in byPkg) continue
-                if (!ai.enabled) continue
-                val label = try {
-                    pm.getApplicationLabel(ai).toString()
-                } catch (_: Exception) {
-                    ai.packageName
-                }
-                val launch = pm.getLaunchIntentForPackage(ai.packageName)
-                if (launch != null) {
-                    byPkg[ai.packageName] = AppItem(label, ai.packageName, ai)
-                }
-            }
-        } catch (_: Exception) {
-        }
-
         return byPkg.values.sortedBy { it.label.lowercase() }
     }
 }

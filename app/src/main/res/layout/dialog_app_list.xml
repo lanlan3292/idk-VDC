@@ -3,6 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
+    android:background="#1E1E1E"
     android:padding="8dp">
 
     <TextView
@@ -13,6 +14,27 @@
         android:textColor="#FFFFFF"
         android:padding="12dp"
         android:textStyle="bold" />
+
+    <EditText
+        android:id="@+id/appSearch"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="搜索应用名称 / 包名"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#888888"
+        android:background="#333333"
+        android:padding="12dp"
+        android:inputType="text"
+        android:imeOptions="actionSearch"
+        android:singleLine="true" />
+
+    <ProgressBar
+        android:id="@+id/appListProgress"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:padding="16dp"
+        android:visibility="gone" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/appList"
